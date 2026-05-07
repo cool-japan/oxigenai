@@ -1,0 +1,4 @@
+requests
+lxml
+google-cloud-bigquery
+python-dotenv

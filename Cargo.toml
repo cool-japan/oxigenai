@@ -1,0 +1,64 @@
+[package]
+name = "oxigenai"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Pure Rust reimplementation of Digital Agency's lawsy-custom-bq (源内) with Legalis-RS computational law verification"
+authors = ["OxigenAI Contributors"]
+repository = "https://github.com/cool-japan/oxigenai"
+keywords = ["law", "legal", "ai", "rust", "legalis"]
+categories = ["web-programming", "api-bindings"]
+
+[dependencies]
+# Web framework
+axum = { version = "0.8", features = ["json", "macros"] }
+tokio = { version = "1", features = ["full"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Legalis-RS ecosystem (COOLJAPAN)
+legalis-core = "0.1.5"
+legalis-verifier = "0.1.5"
+legalis-sim = "0.1.5"
+legalis-dsl = "0.1.5"
+legalis-jp = "0.1.5"
+
+# GCP clients
+gcp-bigquery-client = "0.28"
+google-cloud-auth = "1.9"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+regex = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+thiserror = "2"
+dotenvy = "0.15"
+chrono = { version = "0.4", features = ["serde"] }
+url = { version = "2", features = ["serde"] }
+futures = "0.3"
+anyhow = "1"
+async-trait = "0.1"
+once_cell = "1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+mockall = "0.13"
+
+[[bin]]
+name = "oxigenai"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
