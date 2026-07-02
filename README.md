@@ -310,6 +310,8 @@ cargo install --path .
 }
 ```
 
+`inputs.jurisdiction`（後方互換のためトップレベル `jurisdiction` も可、デフォルト `JP`）で `JP`/`EU`/`US` を指定すると、当該法域の条文を対象に検証・矛盾検出が行われます。HTTPエンドポイントで `jurisdiction` を受け付けるのは `POST /` のみで、`/compile` `/simulate` `/formalize` `/predict-ruling` は現時点では JP 固定です（CLI側は `-j/--jurisdiction` で5サブコマンド共通、上記CLIリファレンス参照）。
+
 **レスポンス**
 
 ```json
@@ -366,21 +368,25 @@ cargo install --path .
 
 #### `POST /simulate`
 
-日本人口モデルを使った政策シミュレーションを実行します。
+日本・米国・EU の人口統計プロファイルを選択して政策シミュレーションを実行します。
 
 **リクエスト**
 
 ```json
 {
   "query": "労働基準法の適用シミュレーション",
-  "population_size": 1000
+  "population_size": 1000,
+  "profile": "jp_2024"
 }
 ```
+
+`profile`（省略時デフォルト `jp_2024`）で `us_2024` / `eu_2024` の人口統計プロファイルも選択できます。未知の値は 400 Bad Request で拒否されます。
 
 **レスポンス**
 
 ```json
 {
+  "query": "労働基準法の適用シミュレーション",
   "population_size": 1000,
   "statute_count": 11,
   "total_applications": 11000,
@@ -388,6 +394,7 @@ cargo install --path .
   "discretion_count": 2156,
   "void_count": 610,
   "deterministic_ratio": 0.749,
+  "discretion_ratio": 0.196,
   "statute_details": [...],
   "markdown_summary": "## 政策シミュレーション結果\n..."
 }
