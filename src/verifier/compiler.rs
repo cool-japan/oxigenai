@@ -1,5 +1,6 @@
 use crate::models::law::FullArticle;
 use crate::verifier::dsl_bridge::{ConversionSource, StatuteBridge};
+use crate::verifier::jurisdiction::DEFAULT_JURISDICTION;
 use legalis_core::Statute;
 use legalis_dsl::{format_statute, format_statutes};
 use legalis_jp::EGovLawParser;
@@ -107,11 +108,45 @@ impl CompilerService {
         })
     }
 
-    /// Mode B: Compile BQ-retrieved law articles → Legalis DSL.
+    /// Compile raw e-Gov XML → raw `legalis_core::Statute` set.
     ///
-    /// Uses `StatuteBridge::convert_articles_domain_only()` for instant conversion
-    /// (no Gemini API call). Domain-matched laws (労働基準法 etc.) return rich statutes.
+    /// Same parse path as [`Self::compile_xml`] but returns the underlying
+    /// statutes (preconditions/effects intact) rather than the DSL-formatted
+    /// [`CompileResult`]. This is the basis for structural analyses such as the
+    /// translation-consistency check ([`crate::verifier::translate_check`]).
+    ///
+    /// Returns `CompileError::NoStatutes` if no articles can be formalized.
+    pub fn compile_xml_to_statutes(xml: &str) -> Result<Vec<Statute>, CompileError> {
+        let parser = EGovLawParser::new();
+        let law = parser
+            .parse(xml)
+            .map_err(|e| CompileError::XmlParse(e.to_string()))?;
+        let statutes = law.to_statutes();
+        if statutes.is_empty() {
+            return Err(CompileError::NoStatutes);
+        }
+        debug!(
+            "compile_xml_to_statutes: {} statutes from {} articles — law: {}",
+            statutes.len(),
+            law.articles.len(),
+            law.title
+        );
+        Ok(statutes)
+    }
+
+    /// Mode B: Compile BQ-retrieved law articles → Legalis DSL (jurisdiction `"JP"`).
+    ///
+    /// Thin wrapper over [`Self::compile_articles_for`] preserving the JP default.
     pub fn compile_articles(articles: &[FullArticle]) -> CompileResult {
+        Self::compile_articles_for(articles, DEFAULT_JURISDICTION)
+    }
+
+    /// Mode B: Compile BQ-retrieved law articles → Legalis DSL for `jurisdiction`.
+    ///
+    /// Uses `StatuteBridge::convert_articles_domain_only_for()` for instant
+    /// conversion (no Gemini API call). Domain-matched laws (労働基準法, GDPR,
+    /// FLSA, …) return rich, jurisdiction-tagged statutes.
+    pub fn compile_articles_for(articles: &[FullArticle], jurisdiction: &str) -> CompileResult {
         if articles.is_empty() {
             return CompileResult {
                 law_title: String::new(),
@@ -123,7 +158,8 @@ impl CompilerService {
             };
         }
 
-        let article_statutes = StatuteBridge::convert_articles_domain_only(articles);
+        let article_statutes =
+            StatuteBridge::convert_articles_domain_only_for(articles, jurisdiction);
         let article_count = articles.len();
 
         if article_statutes.is_empty() {
@@ -212,7 +248,9 @@ mod tests {
 
     #[test]
     fn test_compile_articles_unknown_law() {
-        let articles = vec![make_article("著作権法 第1条", "Article_1")];
+        // 道路交通法 is outside every covered domain, so it exercises the fallback path.
+        // (著作権法 used to be the fixture here but is now a matched IP domain.)
+        let articles = vec![make_article("道路交通法 第1条", "Article_1")];
         let result = CompilerService::compile_articles(&articles);
         // Fallback statute still produces a result
         assert!(!result.statutes.is_empty());

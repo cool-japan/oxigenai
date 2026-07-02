@@ -2,9 +2,10 @@ use crate::handlers::report::AppState;
 use crate::verifier::dsl_bridge::StatuteBridge;
 use crate::verifier::simulator::{
     SimulationConfig, SimulationResult, SimulatorError, SimulatorService, StatuteDetail,
-    jp_2024_profile,
+    profile_by_name,
 };
 use axum::{Json, extract::State, http::StatusCode};
+use legalis_sim::DemographicProfile;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
@@ -16,7 +17,7 @@ pub struct SimulateRequest {
     /// Number of simulated agents (default: 1000, max: 10_000).
     #[serde(default = "default_population_size")]
     pub population_size: usize,
-    /// Demographic profile: "jp_2024" (default, only option for now).
+    /// Demographic profile: "jp_2024" (default), "us_2024", or "eu_2024".
     #[serde(default = "default_profile")]
     pub profile: String,
 }
@@ -27,6 +28,23 @@ fn default_population_size() -> usize {
 
 fn default_profile() -> String {
     "jp_2024".to_string()
+}
+
+/// Resolves the requested demographic profile name to a `DemographicProfile`.
+///
+/// Returns a `400 Bad Request` listing the valid profile names if
+/// `profile_name` does not match a known profile (see
+/// `crate::verifier::simulator::profile_by_name`).
+fn resolve_profile(profile_name: &str) -> Result<DemographicProfile, (StatusCode, String)> {
+    profile_by_name(profile_name).ok_or_else(|| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "不明なプロファイルです: '{profile_name}'。\
+                 有効な値は jp_2024, us_2024, eu_2024 のいずれかです。"
+            ),
+        )
+    })
 }
 
 /// Response body for POST /simulate.
@@ -69,7 +87,9 @@ impl SimulateResponse {
 ///
 /// 1. Embeds `query` via Vertex AI and retrieves matching articles from BigQuery
 /// 2. Converts articles to `Statute` objects (domain matching for known laws, fallback for others)
-/// 3. Generates a Japanese demographic population (`jp_2024_profile`)
+/// 3. Generates a demographic population using the requested `profile`
+///    (`jp_2024_profile` / `us_2024_profile` / `eu_2024_profile`, resolved via
+///    `profile_by_name`; unknown profile names are rejected with 400)
 /// 4. Runs `SimEngine::run_simulation()` — applies all statutes to all agents
 /// 5. Returns `SimulationMetrics` + per-statute breakdown + Markdown summary
 ///
@@ -162,9 +182,11 @@ pub async fn simulate(
         population_size
     );
 
+    let profile = resolve_profile(&req.profile)?;
+
     let config = SimulationConfig {
         population_size,
-        profile: jp_2024_profile(),
+        profile,
     };
 
     let result = SimulatorService::run(statutes, &config)
@@ -227,5 +249,21 @@ mod tests {
         assert!(json.contains("deterministic_ratio"));
         assert!(json.contains("statute_details"));
         assert!(json.contains("markdown_summary"));
+    }
+
+    #[test]
+    fn test_resolve_profile_known_values_ok() {
+        assert!(resolve_profile("jp_2024").is_ok());
+        assert!(resolve_profile("us_2024").is_ok());
+        assert!(resolve_profile("eu_2024").is_ok());
+    }
+
+    #[test]
+    fn test_resolve_profile_unknown_returns_bad_request() {
+        let err = resolve_profile("bogus_profile").expect_err("unknown profile must be rejected");
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+        assert!(err.1.contains("jp_2024"));
+        assert!(err.1.contains("us_2024"));
+        assert!(err.1.contains("eu_2024"));
     }
 }

@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>OxigenAI 源内 — 日本法令AI</title>
+<style>
+  :root {
+    --navy: #15315b;
+    --navy-dark: #0f2647;
+    --accent: #1f6feb;
+    --accent-dark: #1a5fce;
+    --bg: #f4f6fb;
+    --panel: #ffffff;
+    --border: #d7deea;
+    --ink: #1b2330;
+    --muted: #5a6678;
+    --ok: #1a7f54;
+    --ok-bg: #e6f6ee;
+    --warn: #b4480c;
+    --warn-bg: #fcefe4;
+    --bad: #b22222;
+    --bad-bg: #fbe9e9;
+    --code-bg: #f1f4f9;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(20,40,80,.08), 0 6px 20px rgba(20,40,80,.06);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+                 "Hiragino Kaku Gothic ProN", "Noto Sans JP", Meiryo, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  header.site {
+    background: linear-gradient(135deg, var(--navy), var(--navy-dark));
+    color: #fff;
+    padding: 18px 20px;
+    box-shadow: var(--shadow);
+  }
+  header.site .wrap { max-width: 1080px; margin: 0 auto; display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 46px; height: 46px; flex: 0 0 46px; border-radius: 12px;
+    background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.25);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 22px; letter-spacing: -1px;
+  }
+  header.site h1 { font-size: 20px; margin: 0; font-weight: 700; }
+  header.site .sub { font-size: 12.5px; opacity: .82; margin-top: 2px; }
+  main { max-width: 1080px; margin: 22px auto 60px; padding: 0 20px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab {
+    border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+    padding: 9px 16px; border-radius: 999px; cursor: pointer; font-size: 14px; font-weight: 600;
+  }
+  .tab[aria-selected="true"] { background: var(--navy); color: #fff; border-color: var(--navy); }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); margin-bottom: 18px;
+  }
+  label { display: block; font-size: 13px; font-weight: 700; color: var(--navy); margin: 0 0 6px; }
+  .hint { font-size: 12px; color: var(--muted); font-weight: 400; margin: 4px 0 0; }
+  textarea, input, select {
+    width: 100%; font: inherit; color: var(--ink); background: #fff;
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+  }
+  textarea { resize: vertical; min-height: 88px; }
+  textarea.code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; min-height: 150px; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid rgba(31,111,235,.35); border-color: var(--accent); }
+  .row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .field { margin-bottom: 14px; }
+
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+  button.act {
+    border: 0; border-radius: 8px; padding: 11px 18px; font-size: 14.5px; font-weight: 700;
+    cursor: pointer; color: #fff; background: var(--accent);
+  }
+  button.act:hover { background: var(--accent-dark); }
+  button.act.secondary { background: #46586f; }
+  button.act.secondary:hover { background: #394859; }
+  button.act.ghost { background: #fff; color: var(--navy); border: 1px solid var(--border); }
+  button.act:disabled { opacity: .55; cursor: not-allowed; }
+
+  .status { font-size: 13.5px; color: var(--muted); margin: 14px 0 0; min-height: 20px; }
+  .status.loading::before {
+    content: ""; display: inline-block; width: 13px; height: 13px; margin-right: 8px;
+    border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%;
+    vertical-align: -2px; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .alert { border-radius: 8px; padding: 12px 14px; margin-top: 14px; font-size: 14px; }
+  .alert.error { background: var(--bad-bg); color: var(--bad); border: 1px solid #eccaca; white-space: pre-wrap; }
+  .hidden { display: none !important; }
+
+  .result { margin-top: 4px; }
+  .md h1, .md h2, .md h3, .md h4 { color: var(--navy); line-height: 1.35; margin: 1.1em 0 .5em; }
+  .md h1 { font-size: 23px; border-bottom: 2px solid var(--border); padding-bottom: .3em; }
+  .md h2 { font-size: 19px; border-bottom: 1px solid var(--border); padding-bottom: .25em; }
+  .md h3 { font-size: 16px; }
+  .md h4 { font-size: 14.5px; }
+  .md p { margin: .6em 0; }
+  .md ul, .md ol { margin: .5em 0; padding-left: 1.5em; }
+  .md li { margin: .25em 0; }
+  .md a { color: var(--accent); text-decoration: none; word-break: break-all; }
+  .md a:hover { text-decoration: underline; }
+  .md code { background: var(--code-bg); padding: .12em .4em; border-radius: 5px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .9em; }
+  .md pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow-x: auto; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { border-left: 3px solid var(--accent); margin: .7em 0; padding: .2em 0 .2em 14px; color: var(--muted); }
+  .md hr { border: 0; border-top: 1px solid var(--border); margin: 1.2em 0; }
+  .md table { border-collapse: collapse; width: 100%; margin: .8em 0; font-size: 13.5px; }
+  .md th, .md td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; }
+  .md th { background: #eef2f9; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .badge { font-size: 12.5px; font-weight: 700; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--border); background: #eef2f9; color: var(--navy); }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); border-color: #bfe6d2; }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); border-color: #eccaca; }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); border-color: #efd3bd; }
+
+  .usage { margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 12px; }
+  .usage h3 { font-size: 13px; color: var(--muted); margin: 0 0 8px; text-transform: uppercase; letter-spacing: .04em; }
+  .usage table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .usage th, .usage td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; }
+  .usage th:first-child, .usage td:first-child { text-align: left; }
+
+  .scorebar { height: 10px; border-radius: 999px; background: #e9edf4; overflow: hidden; margin: 6px 0 2px; }
+  .scorebar > span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #36a06a); }
+  .subscores { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+  .subscores .s { background: #f7f9fc; border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+  .subscores .s b { display: block; font-size: 20px; color: var(--navy); }
+  .subscores .s span { font-size: 12px; color: var(--muted); }
+  .dsl-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }
+  .dsl-cols h4 { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+  .dsl-cols pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; font-size: 12.5px; max-height: 320px; }
+  .divlist { margin-top: 12px; }
+  .divlist .d { background: var(--warn-bg); border: 1px solid #efd3bd; color: #7a3608; border-radius: 8px; padding: 9px 12px; margin: 6px 0; font-size: 13.5px; }
+
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px; }
+
+  @media (max-width: 720px) {
+    .row, .subscores, .dsl-cols { grid-template-columns: 1fr; }
+    header.site h1 { font-size: 17px; }
+  }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="wrap">
+    <div class="logo" aria-hidden="true">源</div>
+    <div>
+      <h1>OxigenAI 源内 <span style="font-weight:400;opacity:.8;font-size:14px;">— 日本法令AI</span></h1>
+      <div class="sub">Legalis-RS + OxiZ SMT 計算法学エンジン搭載・完全オフライン対応UI</div>
+    </div>
+  </div>
+</header>
+
+<main>
+  <div class="tabs" role="tablist">
+    <button class="tab" id="tab-ai" role="tab" aria-selected="true" aria-controls="panel-ai" onclick="selectTab('ai')">法令AI</button>
+    <button class="tab" id="tab-tx" role="tab" aria-selected="false" aria-controls="panel-tx" onclick="selectTab('tx')">翻訳整合性チェック</button>
+  </div>
+
+  <!-- ─── 法令AI パネル ─────────────────────────────────────────── -->
+  <section class="panel active" id="panel-ai" role="tabpanel" aria-labelledby="tab-ai">
+    <div class="card">
+      <div class="field">
+        <label for="jurisdiction">法域 / Jurisdiction</label>
+        <select id="jurisdiction"><option value="JP">JP — 日本法 / Japanese Law</option></select>
+        <p class="hint">レポート生成時に適用する法域を選択します（判例予測・シミュレーションは日本法基準）。</p>
+      </div>
+      <div class="field">
+        <label for="query">法的な質問・キーワード</label>
+        <textarea id="query" placeholder="例：5年勤続の有期契約社員を経営不振で解雇できるか"></textarea>
+      </div>
+      <div class="field">
+        <label for="facts">事実関係（任意・判例予測で使用）</label>
+        <textarea id="facts" placeholder="例：業績は悪化しているが希望退職の募集など解雇回避努力は行っていない"></textarea>
+      </div>
+      <div class="field" style="max-width:260px;">
+        <label for="population">シミュレーション人口（1〜10,000）</label>
+        <input id="population" type="number" min="1" max="10000" step="100" value="1000">
+      </div>
+      <div class="actions">
+        <button class="act" onclick="runReport()">法令レポート生成</button>
+        <button class="act secondary" onclick="runPredict()">判例予測</button>
+        <button class="act secondary" onclick="runSimulate()">シミュレーション</button>
+        <button class="act ghost" onclick="clearAi()">クリア</button>
+      </div>
+      <p class="hint">※ レポート生成・判例予測・シミュレーションはサーバ側のGCP資格情報（Vertex AI / BigQuery）が必要です。未設定時はエラー内容を表示します。</p>
+      <div class="status" id="ai-status"></div>
+      <div class="alert error hidden" id="ai-error"></div>
+    </div>
+
+    <div class="card result hidden" id="ai-result-card">
+      <div id="ai-badges" class="badges"></div>
+      <div class="md" id="ai-result"></div>
+      <div id="ai-usage"></div>
+    </div>
+  </section>
+
+  <!-- ─── 翻訳整合性チェック パネル ─────────────────────────────── -->
+  <section class="panel" id="panel-tx" role="tabpanel" aria-labelledby="tab-tx">
+    <div class="card">
+      <p class="hint" style="margin-top:0;">
+        2つのe-Gov形式の法令XML（原文と翻訳）をそれぞれ Legalis DSL にコンパイルし、
+        <strong>条文構造（条文数・法的効果の種類・適用条件の種類）</strong>を比較して法的意味の等価性を検証します。
+        この処理は<strong>完全オフライン</strong>で、機械翻訳・外部通信を一切行いません。
+      </p>
+      <div class="row">
+        <div class="field">
+          <label for="source_xml">源文XML（原文）</label>
+          <textarea id="source_xml" class="code" placeholder="<Law ...>...日本語原文...</Law>"></textarea>
+        </div>
+        <div class="field">
+          <label for="target_xml">訳文XML（翻訳）</label>
+          <textarea id="target_xml" class="code" placeholder="<Law ...>...English translation...</Law>"></textarea>
+        </div>
+      </div>
+      <div class="row" style="max-width:420px;">
+        <div class="field">
+          <label for="src_lang">源文言語</label>
+          <input id="src_lang" value="ja">
+        </div>
+        <div class="field">
+          <label for="tgt_lang">訳文言語</label>
+          <input id="tgt_lang" value="en">
+        </div>
+      </div>
+      <div class="actions">
+        <button class="act" onclick="runTranslate()">整合性をチェック</button>
+        <button class="act ghost" onclick="loadTxSample()">サンプルを挿入</button>
+        <button class="act ghost" onclick="clearTx()">クリア</button>
+      </div>
+      <div class="status" id="tx-status"></div>
+      <div class="alert error hidden" id="tx-error"></div>
+    </div>
+
+    <div class="card result hidden" id="tx-result-card">
+      <div id="tx-badges" class="badges"></div>
+      <div class="scorebar"><span id="tx-scorebar" style="width:0%"></span></div>
+      <div class="subscores" id="tx-subscores"></div>
+      <div class="divlist" id="tx-divlist"></div>
+      <div class="dsl-cols">
+        <div><h4>源文 DSL</h4><pre id="tx-src-dsl"></pre></div>
+        <div><h4>訳文 DSL</h4><pre id="tx-tgt-dsl"></pre></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>OxigenAI 源内 — Pure Rust × Legalis-RS。Apache-2.0。</footer>
+
+<script>
+"use strict";
+
+// ─── Tabs ───────────────────────────────────────────────────────────────────
+function selectTab(name) {
+  ["ai", "tx"].forEach(function (n) {
+    document.getElementById("tab-" + n).setAttribute("aria-selected", String(n === name));
+    document.getElementById("panel-" + n).classList.toggle("active", n === name);
+  });
+}
+
+// ─── DOM helpers ────────────────────────────────────────────────────────────
+function $(id) { return document.getElementById(id); }
+function show(el) { el.classList.remove("hidden"); }
+function hide(el) { el.classList.add("hidden"); }
+
+function setStatus(id, msg, loading) {
+  var el = $(id);
+  el.textContent = msg || "";
+  el.classList.toggle("loading", !!loading);
+}
+
+// ─── Minimal, hand-written Markdown renderer (no external library) ───────────
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Inline spans: code, links, bold, italic. Input MUST already be HTML-escaped.
+function renderInline(text) {
+  var codes = [];
+  // Protect code spans with a private-use sentinel that cannot occur in text.
+  text = text.replace(/`([^`]+)`/g, function (m, c) {
+    codes.push(c);
+    return "" + (codes.length - 1) + "";
+  });
+  // Links [label](target) — only safe schemes / relative refs are allowed.
+  text = text.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, function (m, label, target) {
+    var safe = /^(https?:|mailto:|\/|#)/i.test(target) ? target : "#";
+    return '<a href="' + safe + '" target="_blank" rel="noopener noreferrer">' + label + "</a>";
+  });
+  text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  text = text.replace(/(\d+)/g, function (m, i) {
+    return "<code>" + codes[parseInt(i, 10)] + "</code>";
+  });
+  return text;
+}
+
+function renderMarkdown(src) {
+  var lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
+  var out = "";
+  var i = 0;
+  var listType = null;
+
+  function closeList() {
+    if (listType) { out += "</" + listType + ">"; listType = null; }
+  }
+  function isBlockStart(l) {
+    return /^\s*$/.test(l) || /^(#{1,6})\s+/.test(l) || /^```/.test(l) ||
+           /^\s*[-*+]\s+/.test(l) || /^\s*\d+\.\s+/.test(l) || /^\s*>\s?/.test(l) ||
+           /^\s*([-*_])\1{2,}\s*$/.test(l);
+  }
+
+  while (i < lines.length) {
+    var line = lines[i];
+
+    // Fenced code block
+    if (/^```/.test(line)) {
+      closeList();
+      i++;
+      var buf = [];
+      while (i < lines.length && !/^```/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      out += "<pre><code>" + escapeHtml(buf.join("\n")) + "</code></pre>";
+      continue;
+    }
+    // Blank
+    if (/^\s*$/.test(line)) { closeList(); i++; continue; }
+    // Heading
+    var h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeList();
+      var lvl = h[1].length;
+      out += "<h" + lvl + ">" + renderInline(escapeHtml(h[2].trim())) + "</h" + lvl + ">";
+      i++; continue;
+    }
+    // Horizontal rule
+    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) { closeList(); out += "<hr>"; i++; continue; }
+    // Table (header row + |---| separator)
+    if (line.indexOf("|") !== -1 && i + 1 < lines.length &&
+        /^\s*\|?[\s:|-]+\|?\s*$/.test(lines[i + 1]) && lines[i + 1].indexOf("-") !== -1) {
+      closeList();
+      var parseRow = function (r) {
+        return r.replace(/^\s*\|/, "").replace(/\|\s*$/, "").split("|").map(function (c) { return c.trim(); });
+      };
+      var head = parseRow(line);
+      i += 2;
+      var t = "<table><thead><tr>";
+      head.forEach(function (c) { t += "<th>" + renderInline(escapeHtml(c)) + "</th>"; });
+      t += "</tr></thead><tbody>";
+      while (i < lines.length && lines[i].indexOf("|") !== -1 && !/^\s*$/.test(lines[i])) {
+        var cells = parseRow(lines[i]);
+        t += "<tr>";
+        cells.forEach(function (c) { t += "<td>" + renderInline(escapeHtml(c)) + "</td>"; });
+        t += "</tr>";
+        i++;
+      }
+      out += t + "</tbody></table>";
+      continue;
+    }
+    // Blockquote
+    if (/^\s*>\s?/.test(line)) {
+      closeList();
+      var q = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) { q.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+      out += "<blockquote>" + renderInline(escapeHtml(q.join(" "))) + "</blockquote>";
+      continue;
+    }
+    // Unordered list
+    var ul = line.match(/^\s*[-*+]\s+(.*)$/);
+    if (ul) {
+      if (listType !== "ul") { closeList(); out += "<ul>"; listType = "ul"; }
+      out += "<li>" + renderInline(escapeHtml(ul[1])) + "</li>";
+      i++; continue;
+    }
+    // Ordered list
+    var ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ol) {
+      if (listType !== "ol") { closeList(); out += "<ol>"; listType = "ol"; }
+      out += "<li>" + renderInline(escapeHtml(ol[1])) + "</li>";
+      i++; continue;
+    }
+    // Paragraph
+    closeList();
+    var para = [line];
+    i++;
+    while (i < lines.length && !isBlockStart(lines[i])) { para.push(lines[i]); i++; }
+    out += "<p>" + para.map(function (l) { return renderInline(escapeHtml(l.trim())); }).join("<br>") + "</p>";
+  }
+  closeList();
+  return out;
+}
+
+// ─── API helper (handles JSON {error} and plain-text error bodies) ──────────
+async function callApi(path, body) {
+  var res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  var text = await res.text();
+  var data = null;
+  try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+  if (!res.ok) {
+    var msg = (data && data.error) ? data.error : (text || ("HTTP " + res.status));
+    throw new Error(msg);
+  }
+  return data;
+}
+
+// ─── Jurisdictions (GET /jurisdictions) ─────────────────────────────────────
+async function loadJurisdictions() {
+  try {
+    var res = await fetch("/jurisdictions");
+    if (!res.ok) return;
+    var data = await res.json();
+    var sel = $("jurisdiction");
+    sel.innerHTML = "";
+    (data.jurisdictions || []).forEach(function (j) {
+      var opt = document.createElement("option");
+      opt.value = j.code;
+      opt.textContent = j.code + " — " + (j.display_name || j.code);
+      if (j.code === data.default) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    /* offline / not serving: keep the static JP fallback option */
+  }
+}
+
+// ─── Usage / cost metadata table ────────────────────────────────────────────
+function renderUsage(usage) {
+  if (!usage || !usage.length) return "";
+  var rows = usage.map(function (u) {
+    var tok = u.tokens || {};
+    var inTok = tok.promptTokenCount || 0;
+    var outTok = tok.candidatesTokenCount || 0;
+    var cost = (u.estimatedCostInfo && u.estimatedCostInfo.estimatedCost) || 0;
+    return "<tr><td>" + escapeHtml(u.modelVersion || "—") + "</td><td>" + (u.requestCount || 0) +
+           "</td><td>" + inTok + "</td><td>" + outTok + "</td><td>$" + cost.toFixed(4) + "</td></tr>";
+  }).join("");
+  return '<div class="usage"><h3>使用量 / コスト</h3><table><thead><tr>' +
+         "<th>モデル</th><th>要求数</th><th>入力トークン</th><th>出力トークン</th><th>推定費用</th>" +
+         "</tr></thead><tbody>" + rows + "</tbody></table></div>";
+}
+
+// ─── 法令AI actions ─────────────────────────────────────────────────────────
+function aiError(msg) {
+  setStatus("ai-status", "", false);
+  var el = $("ai-error"); el.textContent = msg; show(el);
+  hide($("ai-result-card"));
+}
+function aiBusy(msg) {
+  hide($("ai-error"));
+  setStatus("ai-status", msg, true);
+}
+function aiShow(markdown, usage, badgesHtml) {
+  setStatus("ai-status", "", false);
+  hide($("ai-error"));
+  $("ai-badges").innerHTML = badgesHtml || "";
+  $("ai-result").innerHTML = renderMarkdown(markdown);
+  $("ai-usage").innerHTML = renderUsage(usage);
+  show($("ai-result-card"));
+}
+function queryText() { return $("query").value.trim(); }
+
+async function runReport() {
+  var q = queryText();
+  if (!q) return aiError("法的な質問・キーワードを入力してください。");
+  aiBusy("法令レポートを生成しています…（数十秒かかる場合があります）");
+  try {
+    var data = await callApi("/", { inputs: { input_text: q, jurisdiction: $("jurisdiction").value } });
+    aiShow(data.outputs || "（出力が空でした）", data.usageMetadata,
+           '<span class="badge">法令レポート</span><span class="badge">' + escapeHtml($("jurisdiction").value) + "</span>");
+  } catch (e) { aiError(e.message); }
+}
+
+async function runPredict() {
+  var q = queryText();
+  if (!q) return aiError("法的な質問・キーワードを入力してください。");
+  aiBusy("判例コーパスを検索し、判決を予測しています…");
+  try {
+    var body = { input: q };
+    var facts = $("facts").value.trim();
+    if (facts) body.facts = facts;
+    var data = await callApi("/predict-ruling", body);
+    var conf = Math.round((data.confidence || 0) * 100);
+    var badges =
+      '<span class="badge">判例予測</span>' +
+      '<span class="badge ' + (conf >= 66 ? "ok" : conf >= 40 ? "warn" : "bad") + '">確信度 ' +
+        escapeHtml(data.confidence_label || "") + " (" + conf + "%)</span>" +
+      (data.inferred_legal_area ? '<span class="badge">' + escapeHtml(data.inferred_legal_area) + "</span>" : "") +
+      (data.cited_precedents ? '<span class="badge">参照判例 ' + data.cited_precedents.length + "件</span>" : "");
+    aiShow(data.markdown_summary || data.predicted_holding || "", data.usage, badges);
+  } catch (e) { aiError(e.message); }
+}
+
+async function runSimulate() {
+  var q = queryText();
+  if (!q) return aiError("法的な質問・キーワードを入力してください。");
+  var pop = parseInt($("population").value, 10);
+  if (!pop || pop < 1) pop = 1000;
+  aiBusy("政策シミュレーションを実行しています…（人口 " + pop + "）");
+  try {
+    var data = await callApi("/simulate", { query: q, population_size: pop });
+    var det = Math.round((data.deterministic_ratio || 0) * 100);
+    var badges =
+      '<span class="badge">シミュレーション</span>' +
+      '<span class="badge">人口 ' + (data.population_size || pop) + "</span>" +
+      '<span class="badge">条文 ' + (data.statute_count || 0) + "件</span>" +
+      '<span class="badge ok">決定論的適用率 ' + det + "%</span>";
+    aiShow(data.markdown_summary || "", null, badges);
+  } catch (e) { aiError(e.message); }
+}
+
+function clearAi() {
+  ["query", "facts"].forEach(function (id) { $(id).value = ""; });
+  hide($("ai-error")); hide($("ai-result-card")); setStatus("ai-status", "", false);
+}
+
+// ─── 翻訳整合性チェック actions (POST /translate-check) ─────────────────────
+function txError(msg) {
+  setStatus("tx-status", "", false);
+  var el = $("tx-error"); el.textContent = msg; show(el);
+  hide($("tx-result-card"));
+}
+
+async function runTranslate() {
+  var s = $("source_xml").value.trim();
+  var t = $("target_xml").value.trim();
+  if (!s || !t) return txError("源文と訳文の両方のXMLを入力してください。");
+  hide($("tx-error"));
+  setStatus("tx-status", "構造を比較しています…", true);
+  try {
+    var data = await callApi("/translate-check", {
+      source_xml: s, target_xml: t,
+      source_lang: $("src_lang").value || "ja",
+      target_lang: $("tgt_lang").value || "en"
+    });
+    renderTranslate(data);
+  } catch (e) { txError(e.message); }
+}
+
+function renderTranslate(d) {
+  setStatus("tx-status", "", false);
+  hide($("tx-error"));
+  var pct = Math.round((d.score || 0) * 100);
+  $("tx-badges").innerHTML = d.equivalent
+    ? '<span class="badge ok">✓ 構造的に等価</span><span class="badge">総合スコア ' + pct + "%</span>"
+    : '<span class="badge bad">✗ 構造的差異あり</span><span class="badge">総合スコア ' + pct + "%</span>" +
+      '<span class="badge warn">差異 ' + (d.divergences ? d.divergences.length : 0) + "件</span>";
+  $("tx-scorebar").style.width = pct + "%";
+
+  var sub = [
+    ["条文数", d.count_score], ["法的効果", d.effect_score], ["適用条件", d.condition_score]
+  ].map(function (x) {
+    return '<div class="s"><b>' + Math.round((x[1] || 0) * 100) + "%</b><span>" + x[0] + " 一致度</span></div>";
+  }).join("");
+  $("tx-subscores").innerHTML = sub;
+
+  if (d.divergences && d.divergences.length) {
+    $("tx-divlist").innerHTML = "<h4 style='margin:0 0 4px;color:var(--muted);font-size:13px;'>検出された差異</h4>" +
+      d.divergences.map(function (x) { return '<div class="d">' + escapeHtml(x.detail || x.kind) + "</div>"; }).join("");
+  } else {
+    $("tx-divlist").innerHTML = '<div class="d" style="background:var(--ok-bg);border-color:#bfe6d2;color:var(--ok);">構造的な差異は検出されませんでした。両文書は同じ法的効果・適用条件を持ちます。</div>';
+  }
+
+  $("tx-src-dsl").textContent = d.source_dsl || "（DSLなし）";
+  $("tx-tgt-dsl").textContent = d.target_dsl || "（DSLなし）";
+  show($("tx-result-card"));
+}
+
+function clearTx() {
+  ["source_xml", "target_xml"].forEach(function (id) { $(id).value = ""; });
+  hide($("tx-error")); hide($("tx-result-card")); setStatus("tx-status", "", false);
+}
+
+// A minimal e-Gov-style sample pair: same single article, faithful EN translation.
+function loadTxSample() {
+  var ja = [
+    '<Law Era="Showa" Num="49" Type="Act" Year="22">',
+    "  <LawNum>昭和二十二年法律第四十九号</LawNum>",
+    "  <LawBody>",
+    "    <LawTitle>労働基準法</LawTitle>",
+    "    <MainProvision>",
+    '      <Chapter Num="4">',
+    '        <Article Num="32">',
+    "          <ArticleCaption>労働時間</ArticleCaption>",
+    '          <Paragraph Num="1"><ParagraphNum/><ParagraphSentence>',
+    "            <Sentence>使用者は、労働者に、休憩時間を除き一週間について四十時間を超えて、労働させてはならない。</Sentence>",
+    "          </ParagraphSentence></Paragraph>",
+    "        </Article>",
+    "      </Chapter>",
+    "    </MainProvision>",
+    "  </LawBody>",
+    "</Law>"
+  ].join("\n");
+  var en = [
+    '<Law Era="Showa" Num="49" Type="Act" Year="22">',
+    "  <LawNum>Act No. 49 of 1947</LawNum>",
+    "  <LawBody>",
+    "    <LawTitle>Labor Standards Act</LawTitle>",
+    "    <MainProvision>",
+    '      <Chapter Num="4">',
+    '        <Article Num="32">',
+    "          <ArticleCaption>Working Hours</ArticleCaption>",
+    '          <Paragraph Num="1"><ParagraphNum/><ParagraphSentence>',
+    "            <Sentence>An employer shall not have a worker work more than forty hours per week, excluding rest periods.</Sentence>",
+    "          </ParagraphSentence></Paragraph>",
+    "        </Article>",
+    "      </Chapter>",
+    "    </MainProvision>",
+    "  </LawBody>",
+    "</Law>"
+  ].join("\n");
+  $("source_xml").value = ja;
+  $("target_xml").value = en;
+}
+
+// ─── Boot ───────────────────────────────────────────────────────────────────
+loadJurisdictions();
+</script>
+</body>
+</html>

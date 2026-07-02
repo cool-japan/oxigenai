@@ -1,7 +1,12 @@
 pub mod compiler;
 pub mod contradiction;
 pub mod dsl_bridge;
+pub mod eu_statutes;
 pub mod formalize;
 pub mod integration;
 pub mod jp_statutes;
+pub mod jurisdiction;
+pub mod jurisprudence;
 pub mod simulator;
+pub mod translate_check;
+pub mod us_statutes;

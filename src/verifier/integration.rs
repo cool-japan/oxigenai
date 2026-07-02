@@ -5,6 +5,7 @@ use crate::verifier::contradiction::{
     build_verification_summary_from_report, format_contradiction_warnings, run_full_verification,
 };
 use crate::verifier::dsl_bridge::{ConversionSource, StatuteBridge};
+use crate::verifier::jurisdiction::DEFAULT_JURISDICTION;
 use legalis_core::{LegalResult, Statute};
 use tracing::info;
 
@@ -48,14 +49,28 @@ impl LegalVerifier {
         SectionClassification::from(result)
     }
 
-    /// Detect logical contradictions between statutes using OxiZ SMT.
+    /// Detect logical contradictions between statutes using OxiZ SMT (jurisdiction `"JP"`).
     /// Returns a prefix string to prepend to the Gemini report prompt.
     ///
-    /// Uses `StatuteBridge` with Gemini DSL translation for unknown domains.
+    /// Thin wrapper over [`Self::build_contradiction_prefix_for`] (JP default).
     pub async fn build_contradiction_prefix(
         &self,
         articles: &[FullArticle],
         gemini: &GeminiService,
+    ) -> ContradictionPrefix {
+        self.build_contradiction_prefix_for(articles, gemini, DEFAULT_JURISDICTION)
+            .await
+    }
+
+    /// Detect logical contradictions for `jurisdiction` using OxiZ SMT.
+    ///
+    /// Uses the jurisdiction-aware `StatuteBridge` with Gemini DSL translation
+    /// for unknown domains.
+    pub async fn build_contradiction_prefix_for(
+        &self,
+        articles: &[FullArticle],
+        gemini: &GeminiService,
+        jurisdiction: &str,
     ) -> ContradictionPrefix {
         if articles.is_empty() {
             return ContradictionPrefix {
@@ -64,7 +79,10 @@ impl LegalVerifier {
             };
         }
 
-        let article_statutes = self.bridge.convert_articles(articles, gemini).await;
+        let article_statutes = self
+            .bridge
+            .convert_articles_for(articles, gemini, jurisdiction)
+            .await;
         let statutes: Vec<Statute> = article_statutes.into_iter().map(|a| a.statute).collect();
 
         if statutes.is_empty() {
@@ -84,15 +102,30 @@ impl LegalVerifier {
         }
     }
 
-    /// Annotate a completed report with verification results.
+    /// Annotate a completed report with verification results (jurisdiction `"JP"`).
     /// Appends a "## 法的整合性検証" section to the report.
     ///
-    /// Uses Gemini for DSL translation of non-domain articles.
+    /// Thin wrapper over [`Self::annotate_report_for`] (JP default).
     pub async fn annotate_report(
         &self,
         report_text: &str,
         articles: &[FullArticle],
         gemini: &GeminiService,
+    ) -> AnnotatedReport {
+        self.annotate_report_for(report_text, articles, gemini, DEFAULT_JURISDICTION)
+            .await
+    }
+
+    /// Annotate a completed report with verification results for `jurisdiction`.
+    /// Appends a "## 法的整合性検証" section to the report.
+    ///
+    /// Uses Gemini for DSL translation of non-domain articles.
+    pub async fn annotate_report_for(
+        &self,
+        report_text: &str,
+        articles: &[FullArticle],
+        gemini: &GeminiService,
+        jurisdiction: &str,
     ) -> AnnotatedReport {
         if articles.is_empty() {
             let summary = VerificationSummary::default();
@@ -104,7 +137,10 @@ impl LegalVerifier {
         }
 
         // Convert articles → statutes via hybrid bridge
-        let article_statutes = self.bridge.convert_articles(articles, gemini).await;
+        let article_statutes = self
+            .bridge
+            .convert_articles_for(articles, gemini, jurisdiction)
+            .await;
 
         let statutes_analyzed = articles.len();
         let statutes_parsed = article_statutes

@@ -1,6 +1,6 @@
 [package]
 name = "oxigenai"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "Apache-2.0"
 description = "Pure Rust reimplementation of Digital Agency's lawsy-custom-bq (源内) with Legalis-RS computational law verification"
@@ -14,25 +14,34 @@ categories = ["web-programming", "api-bindings"]
 axum = { version = "0.8", features = ["json", "macros"] }
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
+tower-http = { version = "0.7", features = ["cors", "trace"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 # Legalis-RS ecosystem (COOLJAPAN)
-legalis-core = "0.1.5"
-legalis-verifier = "0.1.5"
-legalis-sim = "0.1.5"
-legalis-dsl = "0.1.5"
-legalis-jp = "0.1.5"
+legalis-core = "0.1.6"
+# "smt-solver" enables the real OxiZ SMT backend (SmtVerifier) — pulls in
+# oxiz-solver/oxiz-core/num-bigint, all Pure Rust. Used by
+# `src/verifier/contradiction.rs` for genuine joint-satisfiability checking
+# instead of the crate's shallow discriminant-based `conditions_overlap`.
+legalis-verifier = { version = "0.1.6", features = ["smt-solver"] }
+legalis-sim = "0.1.6"
+legalis-dsl = "0.1.6"
+legalis-jp = "0.1.6"
 
 # GCP clients
 gcp-bigquery-client = "0.28"
-google-cloud-auth = "1.9"
+google-cloud-auth = "1.13"
 
 # HTTP client
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# NOTE: reqwest 0.13 removed the "rustls-tls" convenience feature. "rustls"
+# is the direct replacement: it now unconditionally pulls in
+# rustls-platform-verifier for cert-store verification (OS-native trust
+# store via platform APIs), replacing the old bundled-webpki-roots default.
+# TLS protocol implementation is still pure rustls (no native-tls/OpenSSL).
+reqwest = { version = "0.13", features = ["json", "rustls"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -51,12 +60,35 @@ async-trait = "0.1"
 once_cell = "1"
 
 [dev-dependencies]
-tokio-test = "0.4"
-mockall = "0.13"
+criterion = { version = "0.8", features = ["async_tokio"] }
 
 [[bin]]
 name = "oxigenai"
 path = "src/main.rs"
+
+# ─── Benchmarks (criterion, offline hot paths) ──────────────────────────────
+# Each group is a focused `harness = false` criterion bench. See the module-level
+# `//!` doc in benches/domain_matching.rs for how to run + Python-baseline notes.
+
+[[bench]]
+name = "domain_matching"
+harness = false
+
+[[bench]]
+name = "dsl_compile"
+harness = false
+
+[[bench]]
+name = "contradiction_smt"
+harness = false
+
+[[bench]]
+name = "simulation"
+harness = false
+
+[[bench]]
+name = "jurisprudence"
+harness = false
 
 [profile.release]
 opt-level = 3

@@ -22,6 +22,9 @@ pub enum SimulatorError {
 /// - Age: Normal(48.4, 18.0) — median age ~48 in Japan's aging society
 /// - Income: LogNormal(15.32, 0.65) — median income ~4.5M JPY (ln(4_500_000) ≈ 15.32)
 /// - Employment type: 63% regular / 22% part-time / 15% fixed-term (厚労省 令和5年調査)
+/// - Weekly hours: Normal(40.0, 8.0) — statutory standard workweek is 40h
+///   (労働基準法32条); std_dev spans part-time workers (~20h) to overtime-heavy
+///   workers (~55h+)
 #[must_use]
 pub fn jp_2024_profile() -> DemographicProfile {
     DemographicProfile {
@@ -47,6 +50,129 @@ pub fn jp_2024_profile() -> DemographicProfile {
             ],
         },
     )
+    .with_attribute(
+        "weekly_hours",
+        Distribution::Normal {
+            mean: 40.0,
+            std_dev: 8.0,
+        },
+    )
+}
+
+/// United States demographic profile based on 2024 estimates.
+///
+/// - Age: Normal(38.9, 20.0) — U.S. Census Bureau 2024 population estimate:
+///   median age ~38.9
+/// - Income: LogNormal(11.29, 0.7) — median household income ~$80,000
+///   (ln(80_000) ≈ 11.29; U.S. Census Bureau reported real median household
+///   income of ~$80,610 for 2023, released Sept. 2024 — rounded to a clean
+///   $80,000 for this parameter)
+/// - Employment type: 80% regular / 16% part-time / 4% fixed-term (contingent)
+///   (BLS 2024: part-time employment ~16.8% of employed persons; BLS
+///   Contingent Worker Supplement: contingent arrangements ~4% of workers)
+/// - Weekly hours: Normal(40.0, 9.0) — FLSA overtime threshold is 40h/week
+///   (29 U.S.C. § 207); BLS usual weekly hours for full-time workers ~42.5h
+///   (2024 CPS); centered on the statutory 40h threshold with std_dev spanning
+///   part-time to overtime-heavy workers
+#[must_use]
+pub fn us_2024_profile() -> DemographicProfile {
+    DemographicProfile {
+        age_distribution: Distribution::Normal {
+            mean: 38.9,
+            std_dev: 20.0,
+        },
+        income_distribution: Distribution::LogNormal {
+            mean: 11.29,
+            std_dev: 0.7,
+        },
+        regions: vec![],
+        custom_attributes: HashMap::new(),
+    }
+    .with_attribute(
+        "employment_type_code",
+        Distribution::Discrete {
+            // (sampled value, probability)
+            values: vec![
+                (0.0, 0.80), // 0 → "regular" (permanent full-time)
+                (1.0, 0.16), // 1 → "part_time"
+                (2.0, 0.04), // 2 → "fixed_term" (contingent/temporary)
+            ],
+        },
+    )
+    .with_attribute(
+        "weekly_hours",
+        Distribution::Normal {
+            mean: 40.0,
+            std_dev: 9.0,
+        },
+    )
+}
+
+/// EU-27 demographic profile based on 2024 estimates.
+///
+/// - Age: Normal(44.4, 19.0) — Eurostat EU-27 population structure
+///   indicators: median age ~44.4 (2023)
+/// - Income: LogNormal(10.18, 0.75) — assumed ~€26,364/year (Eurostat
+///   "annual net earnings" indicator for a single person without children
+///   earning 100% of average earnings, EU aggregate, 2023 estimate).
+///   Treated as one representative figure; actual member-state values vary
+///   widely (e.g. Bulgaria vs. Luxembourg/Denmark), so this is documented as
+///   an approximation rather than a precise cross-country average.
+/// - Employment type: 70% regular / 18% part-time / 12% fixed-term
+///   (Eurostat 2023, ages 20-64: EU-27 part-time employment rate ~17.7%,
+///   temporary employee rate ~12.2%)
+/// - Weekly hours: Normal(40.0, 7.0) — EU Working Time Directive 2003/88/EC
+///   caps average weekly working time (incl. overtime) at 48h; Eurostat
+///   actual weekly hours for full-time employees ~39.9h (2023); centered at
+///   40h with std_dev reflecting cross-member-state variation
+#[must_use]
+pub fn eu_2024_profile() -> DemographicProfile {
+    DemographicProfile {
+        age_distribution: Distribution::Normal {
+            mean: 44.4,
+            std_dev: 19.0,
+        },
+        income_distribution: Distribution::LogNormal {
+            mean: 10.18,
+            std_dev: 0.75,
+        },
+        regions: vec![],
+        custom_attributes: HashMap::new(),
+    }
+    .with_attribute(
+        "employment_type_code",
+        Distribution::Discrete {
+            // (sampled value, probability)
+            values: vec![
+                (0.0, 0.70), // 0 → "regular" (permanent)
+                (1.0, 0.18), // 1 → "part_time"
+                (2.0, 0.12), // 2 → "fixed_term" (temporary contract)
+            ],
+        },
+    )
+    .with_attribute(
+        "weekly_hours",
+        Distribution::Normal {
+            mean: 40.0,
+            std_dev: 7.0,
+        },
+    )
+}
+
+/// Resolves a demographic profile by name.
+///
+/// Supported values: `"jp_2024"` (Japan), `"us_2024"` (United States),
+/// `"eu_2024"` (EU-27). Returns `None` for any other input so callers
+/// (e.g. the `/simulate` HTTP handler) can reject unknown profiles
+/// explicitly instead of silently falling back to a default.
+#[must_use]
+pub fn profile_by_name(name: &str) -> Option<DemographicProfile> {
+    match name {
+        "jp_2024" => Some(jp_2024_profile()),
+        "us_2024" => Some(us_2024_profile()),
+        "eu_2024" => Some(eu_2024_profile()),
+        _ => None,
+    }
 }
 
 /// Configuration for a simulation run.
@@ -109,12 +235,20 @@ pub struct SimulationResult {
 pub struct SimulatorService;
 
 impl SimulatorService {
-    /// Run a simulation: generate a JP population, apply all statutes, collect metrics.
+    /// Run a simulation: generate a population from `config.profile`, apply all
+    /// statutes, collect metrics.
     ///
     /// # Steps
-    /// 1. Generate population via `PopulationGenerator` with `jp_2024_profile()`
-    /// 2. Post-process entities: convert numeric `employment_type_code` → string label,
-    ///    derive `duration_months` for fixed-term workers
+    /// 1. Generate population via `PopulationGenerator` with `config.profile`
+    ///    (see `jp_2024_profile()` / `us_2024_profile()` / `eu_2024_profile()` /
+    ///    `profile_by_name()`)
+    /// 2. Post-process entities: convert numeric `employment_type_code` → string
+    ///    label, derive `duration_months` for fixed-term workers. Other custom
+    ///    attributes (e.g. `weekly_hours`) are already exposed as parseable
+    ///    numeric strings by `PopulationGenerator::generate()`, which calls
+    ///    `entity.set_attribute(name, value.to_string())` for every
+    ///    `custom_attributes` entry — so no bespoke post-processing is needed
+    ///    for them.
     /// 3. Run `SimEngine::run_simulation().await`
     /// 4. Build per-statute details and Markdown summary
     pub async fn run(
@@ -302,6 +436,88 @@ mod tests {
                 .custom_attributes
                 .contains_key("employment_type_code")
         );
+        // Verify weekly_hours custom attribute exists (Phase 4 statute-relevant sampling)
+        assert!(profile.custom_attributes.contains_key("weekly_hours"));
+    }
+
+    #[test]
+    fn test_us_2024_profile_distributions() {
+        let profile = us_2024_profile();
+        // Verify age distribution is Normal with US Census Bureau median (~38.9)
+        assert!(matches!(
+            profile.age_distribution,
+            Distribution::Normal { mean, .. } if (mean - 38.9).abs() < 0.1
+        ));
+        // Verify income is LogNormal
+        assert!(matches!(
+            profile.income_distribution,
+            Distribution::LogNormal { .. }
+        ));
+        // Verify employment_type_code custom attribute exists
+        assert!(
+            profile
+                .custom_attributes
+                .contains_key("employment_type_code")
+        );
+        // Verify weekly_hours custom attribute exists (Phase 4 statute-relevant sampling)
+        assert!(profile.custom_attributes.contains_key("weekly_hours"));
+    }
+
+    #[test]
+    fn test_eu_2024_profile_distributions() {
+        let profile = eu_2024_profile();
+        // Verify age distribution is Normal with Eurostat EU-27 median (~44.4)
+        assert!(matches!(
+            profile.age_distribution,
+            Distribution::Normal { mean, .. } if (mean - 44.4).abs() < 0.1
+        ));
+        // Verify income is LogNormal
+        assert!(matches!(
+            profile.income_distribution,
+            Distribution::LogNormal { .. }
+        ));
+        // Verify employment_type_code custom attribute exists
+        assert!(
+            profile
+                .custom_attributes
+                .contains_key("employment_type_code")
+        );
+        // Verify weekly_hours custom attribute exists (Phase 4 statute-relevant sampling)
+        assert!(profile.custom_attributes.contains_key("weekly_hours"));
+    }
+
+    #[test]
+    fn test_profile_by_name_known() {
+        assert!(profile_by_name("jp_2024").is_some());
+        assert!(profile_by_name("us_2024").is_some());
+        assert!(profile_by_name("eu_2024").is_some());
+    }
+
+    #[test]
+    fn test_profile_by_name_unknown() {
+        assert!(profile_by_name("not_a_real_profile").is_none());
+        assert!(profile_by_name("").is_none());
+    }
+
+    #[test]
+    fn test_weekly_hours_flows_through_population_generation() {
+        // Confirms PopulationGenerator's generic custom_attributes loop already
+        // exposes weekly_hours as a parseable numeric string, so
+        // SimulatorService::run does not need bespoke post-processing for it
+        // (unlike employment_type_code, which needs code -> label resolution).
+        let profile = us_2024_profile();
+        let generator = PopulationGenerator::new(profile, 20);
+        let population = generator.generate();
+        assert_eq!(population.len(), 20);
+        for entity in &population {
+            let weekly_hours = entity
+                .get_attribute("weekly_hours")
+                .expect("weekly_hours should be set by PopulationGenerator");
+            assert!(
+                weekly_hours.parse::<f64>().is_ok(),
+                "weekly_hours should be a parseable numeric string, got {weekly_hours:?}"
+            );
+        }
     }
 
     #[test]

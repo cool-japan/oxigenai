@@ -3,10 +3,6 @@
 target
 **/*.rs.bk
 *.pdb
-Cargo.lock
-
-# Cargo lock (keep for binaries, ignore for libraries)
-# Cargo.lock
 
 # Environment
 .env

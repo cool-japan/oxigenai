@@ -1,0 +1,92 @@
+name: CI
+
+on:
+  push:
+    branches: [master, "0.1.1"]
+  pull_request:
+    branches: [master, "0.1.1"]
+
+# Cancel superseded in-flight runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # COOLJAPAN no-warnings policy: deny rustc warnings for this crate.
+  # Dependencies are unaffected because Cargo applies `--cap-lints allow` to them.
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  fmt:
+    name: Format (rustfmt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy (-D warnings)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # edition 2024 requires a recent stable toolchain (>= 1.85); `@stable` provides it.
+      - name: Install Rust (stable + clippy)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo registry, index and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run clippy (no warnings allowed)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test (nextest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry, index and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # Prebuilt cargo-nextest binary (no compile-from-source cost).
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+
+      - name: Run tests (offline; no GCP/network needed)
+        run: cargo nextest run --all-features
+
+  build:
+    name: Build (release)
+    runs-on: ubuntu-latest
+    # Release profile uses lto = true + codegen-units = 1, so allow extra time.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry, index and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --all-features

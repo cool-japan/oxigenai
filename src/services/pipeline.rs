@@ -31,25 +31,35 @@ const REPORT_MAX_OUTPUT_TOKENS: u32 = 8192;
 // Max output tokens for law name estimation
 const ESTIMATION_MAX_OUTPUT_TOKENS: u32 = 2048;
 
-static CODEBLOCK_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?m)^```(?:json)?\s*\n?|```\s*$").unwrap());
+static CODEBLOCK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?m)^```(?:json)?\s*\n?|```\s*$")
+        .expect("invariant: CODEBLOCK_RE pattern is valid")
+});
 
-static JSON_EXTRACT_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r#"(?s)\{[^{}]*"law_names"[^{}]*\[[^\]]*\][^{}]*\}"#).unwrap());
+static JSON_EXTRACT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?s)\{[^{}]*"law_names"[^{}]*\[[^\]]*\][^{}]*\}"#)
+        .expect("invariant: JSON_EXTRACT_RE pattern is valid")
+});
 
 // Law name patterns for Stage 3 extraction
 static LAW_PATTERN_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"([^\u3002\u3001\n]*(?:\u6cd5|\u898f\u5247|\u7701\u4ee4|\u653f\u4ee4|\u6761\u4f8b)[^\u3002\u3001\n]*)").unwrap()
+    Regex::new(r"([^\u3002\u3001\n]*(?:\u6cd5|\u898f\u5247|\u7701\u4ee4|\u653f\u4ee4|\u6761\u4f8b)[^\u3002\u3001\n]*)").expect("invariant: LAW_PATTERN_RE pattern is valid")
 });
 
 // Markdown bold law name patterns for Stage 4
-static MD_BOLD_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\*\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*\*").unwrap());
+static MD_BOLD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\*\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*\*")
+        .expect("invariant: MD_BOLD_RE pattern is valid")
+});
 
-static MD_ITALIC_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*").unwrap());
+static MD_ITALIC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\*([^*]*(?:法律|法|規則|省令|政令|条例)[^*]*)\*")
+        .expect("invariant: MD_ITALIC_RE pattern is valid")
+});
 
-static PAREN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s*[（(][^)）]*[）)]").unwrap());
+static PAREN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\s*[（(][^)）]*[）)]").expect("invariant: PAREN_RE pattern is valid")
+});
 
 /// Application context shared across pipeline runs.
 pub struct PipelineContext {
@@ -59,11 +69,42 @@ pub struct PipelineContext {
     pub verifier: Arc<LegalVerifier>,
 }
 
+/// Per-request options for [`generate_law_report`].
+///
+/// `jurisdiction` selects the statute domain used by the Legalis-RS verification
+/// stages (default `"JP"`, which reproduces the original JP-only behavior).
+#[derive(Debug, Clone)]
+pub struct ReportOptions {
+    /// Jurisdiction code (e.g. `"JP"`, `"EU"`, `"US"`). Defaults to `"JP"`.
+    pub jurisdiction: String,
+}
+
+impl Default for ReportOptions {
+    fn default() -> Self {
+        Self {
+            jurisdiction: crate::verifier::jurisdiction::DEFAULT_JURISDICTION.to_string(),
+        }
+    }
+}
+
+impl ReportOptions {
+    /// Build options for an explicit jurisdiction code.
+    #[must_use]
+    pub fn new(jurisdiction: impl Into<String>) -> Self {
+        Self {
+            jurisdiction: jurisdiction.into(),
+        }
+    }
+}
+
 /// Generate a complete legal report for the given query.
 /// This is the main entry point, equivalent to `generate_law_report` in law_report_pipeline.py.
+///
+/// `options.jurisdiction` selects the statute domain for verification (default `"JP"`).
 pub async fn generate_law_report(
     query: &str,
     ctx: &PipelineContext,
+    options: &ReportOptions,
 ) -> Result<(String, Vec<UsageSummaryEntry>)> {
     let tracker = Arc::new(Mutex::new(UsageTracker::new()));
     let has_url = query_has_url(query);
@@ -121,7 +162,7 @@ pub async fn generate_law_report(
     // Step 8: NEW — Legalis-RS + OxiZ SMT contradiction detection
     let contradiction_prefix = ctx
         .verifier
-        .build_contradiction_prefix(&final_articles, &ctx.gemini)
+        .build_contradiction_prefix_for(&final_articles, &ctx.gemini, &options.jurisdiction)
         .await;
     debug!(
         "Contradiction detection: has_contradictions={}",
@@ -182,7 +223,12 @@ pub async fn generate_law_report(
     // Step 11: NEW — Legalis-RS annotation (adds 法的整合性検証 section)
     let annotated = ctx
         .verifier
-        .annotate_report(&raw_report, &final_articles, &ctx.gemini)
+        .annotate_report_for(
+            &raw_report,
+            &final_articles,
+            &ctx.gemini,
+            &options.jurisdiction,
+        )
         .await;
     let report_with_verification = annotated.report_text;
 

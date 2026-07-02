@@ -12,12 +12,15 @@ use std::sync::Arc;
 use tracing::{debug, warn};
 
 // Redirect hosts that need URL resolution (Vertex AI search redirects)
-static REDIRECT_HOST_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"vertexaisearch\.cloud\.google\.com").unwrap());
+static REDIRECT_HOST_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"vertexaisearch\.cloud\.google\.com")
+        .expect("invariant: REDIRECT_HOST_RE pattern is valid")
+});
 
 // HTML title extraction regex
-static TITLE_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").unwrap());
+static TITLE_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)<title[^>]*>([^<]+)</title>").expect("invariant: TITLE_RE pattern is valid")
+});
 
 /// Response from a Gemini API call.
 #[derive(Debug, Clone)]
@@ -361,11 +364,6 @@ impl GeminiService {
         if let Some(candidates) = json["candidates"].as_array() {
             for candidate in candidates {
                 let meta = &candidate["groundingMetadata"];
-
-                // Search entry points
-                if let Some(points) = meta["searchEntryPoint"]["renderedContent"].as_str() {
-                    let _ = points; // Used for display, not for hits
-                }
 
                 // Grounding chunks (search results)
                 if let Some(chunks) = meta["groundingChunks"].as_array() {

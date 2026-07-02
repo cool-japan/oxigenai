@@ -7,7 +7,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Rust 2024](https://img.shields.io/badge/Rust-2024_edition-orange.svg)](https://www.rust-lang.org/)
 [![crates.io](https://img.shields.io/crates/v/oxigenai.svg)](https://crates.io/crates/oxigenai)
-[![Legalis-RS](https://img.shields.io/badge/Legalis--RS-0.1.5-green.svg)](https://crates.io/crates/legalis-core)
+[![Legalis-RS](https://img.shields.io/badge/Legalis--RS-0.1.6-green.svg)](https://crates.io/crates/legalis-core)
 
 ---
 
@@ -102,11 +102,29 @@ Python / Vertex AI / BigQuery ML ベースのクラウドネイティブ実装�
 - ✅ **法的事実形式化**（`/formalize` エンドポイント + `oxigenai formalize` CLI）
 - ✅ **統一CLIバイナリ**（`oxigenai` 単体でサーバー・CLI・全機能を提供）
 
-### Beyond（中長期）（商用ver.）
-- 🚀 Generative Jurisprudence（AI による判例案生成）
-- 🚀 GPU 対応シミュレーション
+### Phase 3（完成）
+- ✅ **法域カバレッジ拡大**（`JpDomainMatcher` 全法域対応: 不法行為・商法/会社法・憲法・知的財産・環境法・行政手続法・建設業法/宅建業法 等）
+- ✅ **多法域対応**（Multi-Jurisdiction）
+  - JP/EU/US の3法域レジストリ（`MultiJurisdictionMatcher`）
+  - 全CLIサブコマンドの `-j/--jurisdiction` フラグ（デフォルト `JP`）
+  - `GET /jurisdictions` ディスカバリエンドポイント
+- ✅ **Generative Jurisprudence**（判例案自動生成）
+  - 実在ランドマーク判例8件のキュレーション + Gemini web-grounded検索
+  - `POST /predict-ruling` エンドポイント + `oxigenai predict` CLI
+- ✅ **WebUI 統合**（axum配信の自己完結型SPA、`GET /` `GET /ui`、外部CDN一切不使用でエアギャップ対応）
+- ✅ **翻訳整合性検証**（`POST /translate-check` + `oxigenai translate-check` CLI、原文・訳文2つのe-Gov XMLを構造比較、Sørensen–Dice係数）
+- ✅ **ローカル検証パイプライン**（fmt + clippy + nextest + build 相当のワークフロー定義済み、コスト管理のためデフォルト無効化 / criterion パフォーマンスベンチマーク）
+
+### Phase 4（深度強化）
+- ✅ **`/formalize` 誤判定バグ修正** — 評価エンジンを trait `Condition::evaluate` に切り替え、`Custom`/未充足条件を誤って `Deterministic` と判定していたバグを修正
+- ✅ **矛盾検出の真SMT化** — `contradiction.rs` を真の OxiZ SMT 充足可能性検証（`SmtVerifier::is_satisfiable`）に置き換え、旧来の discriminant ベースのヒューリスティックから移行
+- ✅ **seed statute の構造化** — US/EU/JP の precondition を自由記述の `Condition::Custom` から構造化 SMT 条件（`Threshold`/`Duration`/`AttributeEquals`/`SetMembership`）へ変換
+- ✅ **`/simulate` プロファイル選択バグ修正** — HTTP・CLI 両方に `jp_2024`/`us_2024`/`eu_2024` のプロファイル選択機能を追加。従来は `profile` パラメータが無視され常に日本プロファイルが使われていたバグを修正
+
+### Beyond（中長期・将来構想）
+- 🚀 GPU 対応シミュレーション（upstream legalis-sim は CUDA 対応済み — oxigenai 側の feature passthrough・配線は未実装）
 - 🚀 マルチクラウド対応
-- 🚀 23 法域対応（EU・US・JP 横断検索）
+- 🚀 JP/EU/US 以外への追加法域対応
 
 ---
 
@@ -116,11 +134,11 @@ Python / Vertex AI / BigQuery ML ベースのクラウドネイティブ実装�
 |---------|------|---------|
 | 言語 | Rust | 2024 edition |
 | Web | Axum + Tower + Tokio | 0.8 / 0.5 / 1.x |
-| 法令基盤 | Legalis-RS | 0.1.5 |
-| SMT ソルバー | OxiZ (legalis-verifier 内蔵) | 0.1.5 |
-| シミュレータ | legalis-sim (ECS エンジン) | 0.1.5 |
+| 法令基盤 | Legalis-RS | 0.1.6 |
+| SMT ソルバー | OxiZ (legalis-verifier 内蔵) | 0.1.6 |
+| シミュレータ | legalis-sim (ECS エンジン) | 0.1.6 |
 | GCP SDK | gcp-bigquery-client | 0.28 |
-| GCP Auth | google-cloud-auth | 1.9 |
+| GCP Auth | google-cloud-auth | 1.13 |
 | AI モデル | Vertex AI Gemini 2.5 Flash | - |
 | テスト | cargo-nextest | - |
 
@@ -177,6 +195,7 @@ oxigenai q "労働基準法の時間外労働の上限規制は？"   # 短縮�
 # オプション
 oxigenai "クエリ" --json        # HTTP API と同一スキーマで JSON 出力
 oxigenai "クエリ" --no-usage    # 使用量・コスト表示を抑制
+oxigenai "クエリ" -j EU         # 法域指定（JP/EU/US、デフォルト JP。query/compile/simulate/formalize/predict 共通）
 
 # Web サーバー起動
 oxigenai serve                  # デフォルト port 8080
@@ -195,6 +214,7 @@ oxigenai compile --query "労働基準法" --json      # JSON 出力
 # 政策シミュレーション（クエリは位置引数）
 oxigenai simulate "労働基準法の適用シミュレーション"
 oxigenai simulate "労働基準法" --population 500   # 人口規模指定（最大 10,000）
+oxigenai simulate "労働基準法" --profile us_2024   # デモグラフィックプロファイル指定（jp_2024/us_2024/eu_2024、デフォルト jp_2024）
 oxigenai sim "労働基準法"                          # 短縮エイリアス
 
 # 法的事実の形式化・適用判定（クエリは位置引数）
@@ -204,10 +224,18 @@ oxigenai formalize "有期雇用5年超の無期転換権" \
   --attr years_employed=6 \
   --description "5年以上の有期雇用契約を更新してきた"
 oxigenai eval "無期転換"     # 短縮エイリアス
+
+# 判例予測（Generative Jurisprudence、クエリは位置引数）
+oxigenai predict "5年勤続の有期社員を経営不振で解雇できるか" --facts "解雇回避努力なし"
+oxigenai pred "無期転換拒否は有効か" --json        # 短縮エイリアス / JSON 出力
+
+# 翻訳整合性検証（オフライン — GCP 接続不要）
+oxigenai translate-check --source ja.xml --target en.xml
+oxigenai txcheck --source ja.xml --target en.xml --json   # 短縮エイリアス / JSON 出力
 ```
 
-> **注意**: `query` / `compile` / `simulate` / `formalize` は Google Cloud（Vertex AI + BigQuery）への接続が必要です。
-> 事前に `gcloud auth application-default login` と `.env` の設定を行ってください。
+> **注意**: `query` / `compile` / `simulate` / `formalize` / `predict` は Google Cloud（Vertex AI + BigQuery）への接続が必要です。
+> 事前に `gcloud auth application-default login` と `.env` の設定を行ってください。`translate-check` は完全オフラインで動作します。
 
 実際の出力例は **[docs/result/](docs/result/README.md)** を参照してください。
 
@@ -255,7 +283,7 @@ cp .env.example .env
 # ビルド
 cargo build
 
-# テスト（no-warnings policy）
+# テスト（no-warnings policy、2026-07-02時点 231テスト全通過）
 cargo nextest run
 
 # インストール
@@ -386,6 +414,97 @@ cargo install --path .
 
 ヘルスチェックエンドポイント。HTTP 200 を返します。
 
+#### `GET /jurisdictions`
+
+利用可能な法域の一覧と、リクエストで `jurisdiction` を省略した場合のデフォルト値を返すディスカバリエンドポイント（リクエストボディなし）。
+
+**レスポンス**
+
+```json
+{
+  "jurisdictions": [
+    { "code": "EU", "display_name": "欧州連合法 / European Union Law (GDPR)", "is_populated": true },
+    { "code": "JP", "display_name": "日本法 / Japanese Law", "is_populated": true },
+    { "code": "US", "display_name": "米国連邦法 / United States Federal Law", "is_populated": true }
+  ],
+  "default": "JP"
+}
+```
+
+#### `POST /predict-ruling`
+
+判例コーパス検索 + Gemini web-grounded 検索により、判決予測（Generative Jurisprudence／生成的法解釈）を行います。
+
+**リクエスト**
+
+```json
+{
+  "input": "5年勤続の有期契約社員を経営不振で解雇できるか",
+  "facts": "業績は悪化しているが希望退職の募集など解雇回避努力は行っていない"
+}
+```
+
+`input` は `query` / `input_text` をエイリアスとして受け付けます。`facts`（事実関係の自由記述）は省略可能です。
+
+**レスポンス**
+
+```json
+{
+  "query": "5年勤続の有期契約社員を経営不振で解雇できるか\n\n【事実関係】\n業績は悪化しているが希望退職の募集など解雇回避努力は行っていない",
+  "issue": "経営不振を理由とする有期契約労働者の雇止めの有効性",
+  "inferred_legal_area": "労働法",
+  "predicted_holding": "解雇回避努力が尽くされていないため、雇止めは無効と判断される可能性が高い",
+  "reasoning": "（判例の射程に基づく推論、Markdown形式）",
+  "cited_precedents": [
+    { "id": "nihon-ensei-1975", "case_name": "日本食塩製造事件", "court": "最高裁判所", "legal_area": "労働法", "citation": "最判昭和五十年四月二十五日", "relevance_score": 0.83, "precedent_weight": 0, "holding_summary": "解雇権濫用法理の基礎を示した判例（現・労働契約法16条）", "cited_statutes": ["労働契約法16条"], "source_url": "https://www.courts.go.jp/app/hanrei_jp/search1", "is_binding": true }
+  ],
+  "confidence": 0.72,
+  "confidence_label": "中程度",
+  "legal_classification": "judicial_discretion",
+  "context_id": "5f2c1e2a-9b3d-4e21-8f3a-1234567890ab",
+  "markdown_summary": "## 判決予測\n\n...",
+  "usage": [{ "modelVersion": "gemini-2.5-flash", "requestCount": 2, "tokens": { "promptTokenCount": 4200, "candidatesTokenCount": 1100 }, "estimatedCostInfo": { "estimatedCost": 0.004, "currency": "USD" } }]
+}
+```
+
+#### `POST /translate-check`
+
+原文・訳文の2つの e-Gov 法令 XML を Legalis DSL にコンパイルし、`legalis_core::Statute` 集合を構造比較して翻訳の論理的一貫性を検証します（完全オフライン、機械翻訳・ネットワーク通信なし）。
+
+**リクエスト**
+
+```json
+{
+  "source_xml": "<Law>...日本語原文...</Law>",
+  "target_xml": "<Law>...English translation...</Law>",
+  "source_lang": "ja",
+  "target_lang": "en"
+}
+```
+
+`source_lang`（デフォルト `"ja"`）/ `target_lang`（デフォルト `"en"`）は比較結果に影響しない付帯ラベルです。
+
+**レスポンス**
+
+```json
+{
+  "equivalent": false,
+  "score": 0.86,
+  "count_score": 1.0,
+  "effect_score": 0.8,
+  "condition_score": 0.78,
+  "divergences": [
+    { "kind": "condition_kind", "detail": "前提条件の構造が一致しません（原文: Threshold 1件 → 訳文: Custom 1件）", "source": "1", "target": "0" }
+  ],
+  "source_signature": { "statute_count": 1, "precondition_count": 3, "effect_types": { "Prohibition": 1 }, "condition_kinds": { "And": 1, "Threshold": 1, "AttributeEquals": 1 } },
+  "target_signature": { "statute_count": 1, "precondition_count": 3, "effect_types": { "Prohibition": 1 }, "condition_kinds": { "And": 1, "Custom": 1, "AttributeEquals": 1 } },
+  "source_lang": "ja",
+  "target_lang": "en",
+  "source_dsl": "STATUTE JP_Civil_Art95: ...",
+  "target_dsl": "STATUTE JLT_Civil_Art95: ..."
+}
+```
+
 ---
 
 ## Legalis-RS 統合 / Legalis-RS Integration
@@ -398,7 +517,7 @@ OxigenAI は [Legalis-RS](https://github.com/cool-japan/legalis)（Computational
 |-------------------|--------------------------|------------------------|
 | **法務省 — 法制度整備支援（ODA）** | `legalis-jp` + `legalis-dsl` + `legalis-verifier` | `/compile`, `/formalize`, `/` |
 | **法務省 — 法令外国語訳整備事業** | `legalis-jp` + `legalis-dsl` + `legalis-verifier` | `/compile` (lang pair) |
-| デジタル庁 — 法令 RAG | `legalis-llm` + `legalis-jp` | `/`（源内互換） |
+| デジタル庁 — 法令 RAG | `GeminiService`（`gemini_client.rs`） + `legalis-jp` | `/`（源内互換） |
 | 厚生労働省 — 労働法適用判定 | `legalis-jp` + `legalis-sim` | `/simulate`, `/formalize` |
 | 国土交通省 — 建築基準法・都市計画 | `legalis-jp` + `legalis-core` | `/`, `/compile` |
 | 財務省 — 税法解釈 | `legalis-jp` + `legalis-verifier` | `/`, `/formalize` |
@@ -554,13 +673,13 @@ let result = SimulatorService::run(statutes, &config).await?;
 println!("{}", result.markdown_summary);
 ```
 
-#### `legalis-llm` — LLM ブリッジ
+#### `GeminiService`（`gemini_client.rs`）— LLM 統合
 
-Gemini / GPT-4 等の LLM を Legalis-RS パイプラインに統合するアダプタ層：
+OxigenAI 自身が実装する Gemini 統合レイヤーです。**`legalis-llm` クレートには依存していません**（`Cargo.toml` / `src/` のいずれにも参照なし）— Vertex AI Gemini REST API を直接呼び出します：
 
-- DSL 生成プロンプト最適化（構造化出力 + スキーマ強制）
-- LLM 出力の DSL バリデーション（型エラー自動修正）
-- 人間のレビュー向け逆翻訳（DSL → 自然言語日本語）
+- Application Default Credentials（`google-cloud-auth`）でアクセストークンを取得し、`reqwest` 経由で REST API を直接呼び出し
+- Web グラウンディング付き呼び出し（`call_with_grounding`）・厳格出力呼び出し（`call_strict`）・レポート生成呼び出し（`call_for_report`）・埋め込み生成（`embed_texts`）
+- グラウンディング検索結果の抽出・リダイレクト解決（`extract_grounding_web_hits` / `resolve_redirect_web_hits`）
 
 ---
 

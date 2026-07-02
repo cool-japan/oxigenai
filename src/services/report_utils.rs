@@ -3,10 +3,14 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 
 // Regex for citation numbers like [1], [2, 3], [1,2,3]
-static CITATION_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\[(\d+(?:,\s*\d+)*)\]").unwrap());
+static CITATION_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\[(\d+(?:,\s*\d+)*)\]").expect("invariant: CITATION_RE pattern is valid")
+});
 
 // Regex to detect Mermaid diagram blocks
-static MERMAID_BLOCK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?s)```mermaid(.*?)```").unwrap());
+static MERMAID_BLOCK_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?s)```mermaid(.*?)```").expect("invariant: MERMAID_BLOCK_RE pattern is valid")
+});
 
 /// Format a reference item for display in the report's 出典 section.
 /// Mirrors `_format_reference` in report_utils.py.

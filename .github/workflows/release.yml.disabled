@@ -1,0 +1,42 @@
+name: Release (binary artifact)
+
+# Manual trigger only.
+#
+# COOLJAPAN policy: this workflow NEVER publishes to crates.io and NEVER pushes
+# git tags. It only compiles a release binary and uploads it as a downloadable
+# workflow artifact. Publishing to crates.io remains a deliberate, manual,
+# human-run step performed outside of CI.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  build-linux:
+    name: Build Linux x86_64 binary
+    runs-on: ubuntu-latest
+    # Release profile uses lto = true + codegen-units = 1, so allow extra time.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry, index and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release binary
+        run: cargo build --release --all-features
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: oxigenai-linux-x86_64
+          path: target/release/oxigenai
+          if-no-files-found: error

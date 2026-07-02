@@ -7,14 +7,16 @@ use std::collections::HashSet;
 // Matches kanji+kana sequences ending with 法律/法/規則/政令/条例/省令.
 static LAW_NAME_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"[\u4e00-\u9fff\u3040-\u30ff\uff00-\uffef]+(?:法律|法|規則|政令|条例|省令)")
-        .unwrap()
+        .expect("invariant: LAW_NAME_RE pattern is valid")
 });
 
 // Regex for extracting article numbers from query (e.g. "第42条").
-static ARTICLE_NUM_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"第(\d+)条").unwrap());
+static ARTICLE_NUM_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"第(\d+)条").expect("invariant: ARTICLE_NUM_RE pattern is valid"));
 
 // URL detection regex.
-static URL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"https?://\S+").unwrap());
+static URL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"https?://\S+").expect("invariant: URL_RE pattern is valid"));
 
 /// Extract formal law names from user query text.
 /// Mirrors `_extract_law_names_from_query` from law_report_pipeline.py.

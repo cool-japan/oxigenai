@@ -1,6 +1,7 @@
 use crate::models::law::FullArticle;
 use crate::verifier::dsl_bridge::StatuteBridge;
-use legalis_core::{AttributeBasedContext, EntailmentEngine, LegalResult, Uuid};
+use crate::verifier::jurisdiction::DEFAULT_JURISDICTION;
+use legalis_core::{AttributeBasedContext, EvaluationError, LegalResult, Uuid};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -24,10 +25,17 @@ pub struct UserFacts {
 }
 
 impl UserFacts {
-    /// Build an `AttributeBasedContext` from this facts object.
+    /// Build an `AttributeBasedContext` from this facts object (jurisdiction `"JP"`).
     /// Numeric fields are stringified so they can be used with `AttributeEquals` conditions.
     #[must_use]
     pub fn to_context(&self) -> AttributeBasedContext {
+        self.to_context_for(DEFAULT_JURISDICTION)
+    }
+
+    /// Build an `AttributeBasedContext`, tagging the `jurisdiction` attribute.
+    /// Numeric fields are stringified so they can be used with `AttributeEquals` conditions.
+    #[must_use]
+    pub fn to_context_for(&self, jurisdiction: &str) -> AttributeBasedContext {
         let mut attrs = self.attributes.clone();
 
         if let Some(age) = self.age {
@@ -50,7 +58,7 @@ impl UserFacts {
         }
 
         attrs.insert("description".to_string(), self.description.clone());
-        attrs.insert("jurisdiction".to_string(), "JP".to_string());
+        attrs.insert("jurisdiction".to_string(), jurisdiction.to_string());
 
         AttributeBasedContext::new(attrs)
     }
@@ -128,20 +136,34 @@ impl FormalizeService {
         }
     }
 
-    /// Evaluate the given articles against user facts.
+    /// Evaluate the given articles against user facts (jurisdiction `"JP"`).
     ///
-    /// Uses domain-only conversion for speed (no Gemini call).
-    /// Returns one `FactEvaluation` per statute that was evaluated.
+    /// Thin wrapper over [`Self::evaluate_for`] preserving the JP default.
     #[must_use]
     pub fn evaluate(&self, articles: &[FullArticle], facts: &UserFacts) -> Vec<FactEvaluation> {
+        self.evaluate_for(articles, facts, DEFAULT_JURISDICTION)
+    }
+
+    /// Evaluate the given articles against user facts for `jurisdiction`.
+    ///
+    /// Uses jurisdiction-aware domain-only conversion for speed (no Gemini call).
+    /// Returns one `FactEvaluation` per statute that was evaluated.
+    #[must_use]
+    pub fn evaluate_for(
+        &self,
+        articles: &[FullArticle],
+        facts: &UserFacts,
+        jurisdiction: &str,
+    ) -> Vec<FactEvaluation> {
         // Convert articles → statutes (domain-only, no async Gemini needed)
-        let article_statutes = StatuteBridge::convert_articles_domain_only(articles);
+        let article_statutes =
+            StatuteBridge::convert_articles_domain_only_for(articles, jurisdiction);
 
         if article_statutes.is_empty() {
             return vec![];
         }
 
-        let context = facts.to_context();
+        let context = facts.to_context_for(jurisdiction);
 
         // Deduplicate statutes by ID
         let mut seen_ids = std::collections::HashSet::new();
@@ -156,17 +178,18 @@ impl FormalizeService {
             })
             .collect();
 
-        let engine = EntailmentEngine::new(statutes.clone());
-        let entailment_results = engine.entail(&context);
-
-        // Convert entailment results to LegalResult<String> → FactEvaluation
-        entailment_results
-            .into_iter()
-            .zip(statutes.iter())
-            .map(|(entailment, statute)| {
-                let legal_result = entailment_to_legal_result(&entailment, statute);
+        // Evaluate each statute's preconditions directly via the inherent, trait-bounded
+        // `Condition::evaluate::<AttributeBasedContext>` — NOT `EntailmentEngine::entail`
+        // (which internally uses `Condition::evaluate_simple`, whose catch-all `_ => Ok(true)`
+        // trivially "satisfies" structured `Duration`/`Threshold`/`SetMembership`/`Custom`
+        // conditions regardless of facts). See `statute_to_legal_result` for the aggregation
+        // policy that fixes this.
+        statutes
+            .iter()
+            .map(|statute| {
+                let legal_result = statute_to_legal_result(statute, &context);
                 FactEvaluation::from_legal_result(
-                    entailment.statute_id.clone(),
+                    statute.id.clone(),
                     statute.title.clone(),
                     &legal_result,
                 )
@@ -175,45 +198,79 @@ impl FormalizeService {
     }
 }
 
-/// Convert an `EntailmentResult` to `LegalResult<String>`.
+/// Evaluate all of a statute's preconditions (the `Vec<Condition>` is an implicit AND)
+/// against `context` using `Condition::evaluate`, and aggregate into a `LegalResult<String>`.
 ///
-/// - `conditions_satisfied == true`  → `Deterministic(effect.description)`
-/// - Has evaluation errors            → `Void { reason }`
-/// - Conditions not satisfied         → `JudicialDiscretion` (needs human judgment)
-fn entailment_to_legal_result(
-    entailment: &legalis_core::types::EntailmentResult,
+/// Aggregation policy:
+/// - Zero preconditions, or all evaluate `Ok(true)`      → `Deterministic(effect.description)`
+/// - No errors, but at least one `Ok(false)`             → `JudicialDiscretion`
+/// - At least one `Err(EvaluationError::Custom { .. })`  → `JudicialDiscretion`
+///   (a genuinely qualitative/discretionary precondition — this is the semantic fix:
+///   such a condition can never be mechanically "satisfied", so it must never make a
+///   statute `Deterministic`)
+/// - At least one `Err(_)` of any other kind (e.g. missing attribute/context data)
+///   → also `JudicialDiscretion`
+///
+/// `Void` is intentionally never constructed here — it is reserved exclusively for the
+/// OxiZ SMT contradiction detector (`contradiction.rs::detect_smt_contradictions`), which
+/// is a completely separate code path from per-fact statute evaluation.
+fn statute_to_legal_result(
     statute: &legalis_core::Statute,
+    context: &AttributeBasedContext,
 ) -> LegalResult<String> {
-    if !entailment.errors.is_empty() {
-        return LegalResult::Void {
-            reason: entailment.errors.join("; "),
-        };
+    let mut all_satisfied = true;
+    let mut saw_custom_error = false;
+    let mut saw_other_error = false;
+
+    for condition in &statute.preconditions {
+        match condition.evaluate(context) {
+            Ok(true) => {}
+            Ok(false) => all_satisfied = false,
+            Err(EvaluationError::Custom { .. }) => {
+                all_satisfied = false;
+                saw_custom_error = true;
+            }
+            Err(_) => {
+                all_satisfied = false;
+                saw_other_error = true;
+            }
+        }
     }
 
-    if entailment.conditions_satisfied {
-        LegalResult::Deterministic(entailment.effect.description.clone())
-    } else {
-        // Preconditions not satisfied — this requires human judgment about applicability
-        let issue = if statute.discretion_logic.is_some() {
-            format!(
-                "条文の適用条件（{}）が充足されていません。裁量的判断が必要です。",
-                statute.title
-            )
-        } else {
-            format!(
-                "条文「{}」の適用条件が現在の事実では充足されません。",
-                statute.title
-            )
-        };
+    if all_satisfied {
+        return LegalResult::Deterministic(statute.effect.description.clone());
+    }
 
-        LegalResult::JudicialDiscretion {
-            issue,
-            context_id: Uuid::new_v4(),
-            narrative_hint: Some(format!(
-                "追加の事実確認または専門家による解釈が必要: {}",
-                entailment.effect.description
-            )),
-        }
+    // Preconditions not (fully) satisfied — this requires human judgment about applicability.
+    let issue = if saw_custom_error {
+        format!(
+            "条文「{}」の適用には裁量的判断が必要です（機械的に決定不能な要件を含みます）。",
+            statute.title
+        )
+    } else if saw_other_error {
+        format!(
+            "条文「{}」の適用条件を判断するための事実情報が不足しています。",
+            statute.title
+        )
+    } else if statute.discretion_logic.is_some() {
+        format!(
+            "条文の適用条件（{}）が充足されていません。裁量的判断が必要です。",
+            statute.title
+        )
+    } else {
+        format!(
+            "条文「{}」の適用条件が現在の事実では充足されません。",
+            statute.title
+        )
+    };
+
+    LegalResult::JudicialDiscretion {
+        issue,
+        context_id: Uuid::new_v4(),
+        narrative_hint: Some(format!(
+            "追加の事実確認または専門家による解釈が必要: {}",
+            statute.effect.description
+        )),
     }
 }
 
@@ -335,5 +392,278 @@ mod tests {
             assert_eq!(eval.result_type, "deterministic");
             assert!(eval.applies);
         }
+    }
+
+    // ─── Phase 4: Condition::evaluate aggregation fix regression tests ──────────
+    //
+    // These prove `/formalize` no longer trivially reports `Deterministic` for
+    // statutes with structured `Threshold`/`Duration`/`SetMembership`/`Custom`
+    // preconditions (the `EntailmentEngine::entail` / `evaluate_simple` catch-all
+    // `_ => Ok(true)` bug — see TODO.md Phase 4, line ~153).
+
+    fn facts_with(pairs: &[(&str, &str)], description: &str) -> UserFacts {
+        let mut attrs = HashMap::new();
+        for (k, v) in pairs {
+            attrs.insert((*k).to_string(), (*v).to_string());
+        }
+        UserFacts {
+            age: None,
+            income: None,
+            attributes: attrs,
+            description: description.to_string(),
+        }
+    }
+
+    fn flsa_overtime_article() -> FullArticle {
+        FullArticle {
+            law_id: "us_flsa".to_string(),
+            title: "FLSA overtime pay".to_string(),
+            content: "Overtime compensation for hours worked in excess of 40 in a workweek."
+                .to_string(),
+            unique_anchor: "FLSA_Sec207_Article".to_string(),
+            anchor: None,
+            url: "https://www.law.cornell.edu/uscode/text/29/207".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_flsa_overtime_deterministic_when_over_40() {
+        let service = FormalizeService::new();
+        let articles = vec![flsa_overtime_article()];
+        let facts = facts_with(
+            &[
+                ("employee_classification", "non_exempt"),
+                ("weekly_hours", "45"),
+            ],
+            "週45時間労働する非適用除外従業員",
+        );
+
+        let evaluations = service.evaluate_for(&articles, &facts, "US");
+        let eval = evaluations
+            .iter()
+            .find(|e| e.statute_id == "FLSA_Sec207")
+            .expect("FLSA_Sec207 should be in evaluations");
+        // employee_classification==non_exempt (true) AND weekly_hours(45) > 40 (true)
+        // → both preconditions Ok(true) → Deterministic.
+        assert_eq!(eval.result_type, "deterministic");
+        assert!(eval.applies);
+    }
+
+    #[test]
+    fn test_flsa_overtime_discretion_when_under_40() {
+        let service = FormalizeService::new();
+        let articles = vec![flsa_overtime_article()];
+        let facts = facts_with(
+            &[
+                ("employee_classification", "non_exempt"),
+                ("weekly_hours", "30"),
+            ],
+            "週30時間労働する非適用除外従業員",
+        );
+
+        let evaluations = service.evaluate_for(&articles, &facts, "US");
+        let eval = evaluations
+            .iter()
+            .find(|e| e.statute_id == "FLSA_Sec207")
+            .expect("FLSA_Sec207 should be in evaluations");
+        // weekly_hours(30) > 40 is Ok(false) → JudicialDiscretion.
+        // This is the single most important regression test in this suite: it proves
+        // Threshold actually gates through the full public /formalize pipeline with
+        // zero confounders (FLSA_Sec207 has no Custom precondition).
+        assert_eq!(eval.result_type, "judicial_discretion");
+        assert!(!eval.applies);
+    }
+
+    #[test]
+    fn test_flsa_overtime_discretion_when_hours_missing() {
+        let service = FormalizeService::new();
+        let articles = vec![flsa_overtime_article()];
+        // weekly_hours intentionally omitted → Threshold precondition errors
+        // (MissingAttribute), which must map to JudicialDiscretion, never Void.
+        let facts = facts_with(
+            &[("employee_classification", "non_exempt")],
+            "労働時間が未提供の非適用除外従業員",
+        );
+
+        let evaluations = service.evaluate_for(&articles, &facts, "US");
+        let eval = evaluations
+            .iter()
+            .find(|e| e.statute_id == "FLSA_Sec207")
+            .expect("FLSA_Sec207 should be in evaluations");
+        assert_eq!(eval.result_type, "judicial_discretion");
+        assert_ne!(eval.result_type, "void");
+    }
+
+    #[test]
+    fn test_ada_employee_count_threshold() {
+        use crate::verifier::us_statutes::ada_section_12112_nondiscrimination;
+
+        let statute = ada_section_12112_nondiscrimination();
+        // preconditions[0] is the structured Threshold half of the AND
+        // (employee_count >= 15); preconditions[1] is a retained Custom
+        // condition (see test_ada_full_pipeline_discretion_regardless_of_employee_count
+        // for why the full pipeline can't be used to prove this half in isolation).
+        assert_eq!(statute.preconditions.len(), 2);
+        let threshold_condition = &statute.preconditions[0];
+
+        let ctx_20 =
+            facts_with(&[("employee_count", "20")], "従業員20名の使用者").to_context_for("US");
+        let ctx_8 =
+            facts_with(&[("employee_count", "8")], "従業員8名の使用者").to_context_for("US");
+
+        assert_eq!(threshold_condition.evaluate(&ctx_20), Ok(true));
+        assert_eq!(threshold_condition.evaluate(&ctx_8), Ok(false));
+    }
+
+    #[test]
+    fn test_ada_full_pipeline_discretion_regardless_of_employee_count() {
+        // ADA_Sec12112 retains a Condition::Custom precondition (the qualitative
+        // "qualified individual, employment decision" judgment) alongside the
+        // structured employee_count >= 15 Threshold. Through the full
+        // FormalizeService pipeline this means the statute resolves to
+        // JudicialDiscretion for EVERY employee_count value — arguably legally
+        // correct (whether a specific decision is disability discrimination
+        // always needs human judgment even once the size threshold is met).
+        // This documents that result_type/applies alone cannot discriminate on
+        // employee_count through the full pipeline; see
+        // test_ada_employee_count_threshold for the isolated proof that the
+        // Threshold half still genuinely gates.
+        let service = FormalizeService::new();
+        let articles = vec![FullArticle {
+            law_id: "us_ada".to_string(),
+            title: "ADA disability discrimination".to_string(),
+            content: "Prohibition of discrimination on the basis of disability.".to_string(),
+            unique_anchor: "ADA_Sec12112_Article".to_string(),
+            anchor: None,
+            url: "https://www.eeoc.gov/statutes/americans-disabilities-act-1990".to_string(),
+        }];
+
+        for employee_count in ["20", "8"] {
+            let facts = facts_with(
+                &[("employee_count", employee_count)],
+                "障害者に関する雇用上の決定",
+            );
+            let evaluations = service.evaluate_for(&articles, &facts, "US");
+            let eval = evaluations
+                .iter()
+                .find(|e| e.statute_id == "ADA_Sec12112")
+                .expect("ADA_Sec12112 should be in evaluations");
+            assert_eq!(eval.result_type, "judicial_discretion");
+        }
+    }
+
+    #[test]
+    fn test_fmla_dual_threshold() {
+        use crate::verifier::us_statutes::fmla_section_2612_leave_entitlement;
+
+        let statute = fmla_section_2612_leave_entitlement();
+        // preconditions[0] = Duration (duration_months >= 12)
+        // preconditions[1] = Threshold (hours_worked_12mo >= 1250)
+        // preconditions[2] = retained Custom condition (qualifying event) — same
+        // nuance as ADA_Sec12112, see test_fmla_full_pipeline_discretion_regardless_of_hours.
+        assert_eq!(statute.preconditions.len(), 3);
+        let duration_condition = &statute.preconditions[0];
+        let hours_condition = &statute.preconditions[1];
+
+        let ctx_ok = facts_with(
+            &[("duration_months", "12"), ("hours_worked_12mo", "1500")],
+            "12か月以上勤務し1500時間労働した労働者",
+        )
+        .to_context_for("US");
+        assert_eq!(duration_condition.evaluate(&ctx_ok), Ok(true));
+        assert_eq!(hours_condition.evaluate(&ctx_ok), Ok(true));
+
+        let ctx_low_hours = facts_with(
+            &[("duration_months", "12"), ("hours_worked_12mo", "1000")],
+            "12か月以上勤務したが労働時間が1000時間の労働者",
+        )
+        .to_context_for("US");
+        // 1000 < 1250 → Threshold precondition evaluates Ok(false).
+        assert_eq!(hours_condition.evaluate(&ctx_low_hours), Ok(false));
+        // Duration is unaffected by the hours change.
+        assert_eq!(duration_condition.evaluate(&ctx_low_hours), Ok(true));
+    }
+
+    #[test]
+    fn test_fmla_full_pipeline_discretion_regardless_of_hours() {
+        // Same retained-Custom nuance as ADA_Sec12112: FMLA_Sec2612 always
+        // resolves to JudicialDiscretion through the full pipeline regardless
+        // of hours_worked_12mo, because preconditions[2] is a permanent-Err
+        // Custom condition. test_fmla_dual_threshold proves the Duration/
+        // Threshold halves genuinely gate in isolation.
+        let service = FormalizeService::new();
+        let articles = vec![FullArticle {
+            law_id: "us_fmla".to_string(),
+            title: "FMLA medical leave entitlement".to_string(),
+            content: "Family and medical leave entitlement.".to_string(),
+            unique_anchor: "FMLA_Sec2612_Article".to_string(),
+            anchor: None,
+            url: "https://www.dol.gov/agencies/whd/fmla".to_string(),
+        }];
+
+        for hours in ["1500", "1000"] {
+            let facts = facts_with(
+                &[("duration_months", "12"), ("hours_worked_12mo", hours)],
+                "家族・医療休暇の対象事由",
+            );
+            let evaluations = service.evaluate_for(&articles, &facts, "US");
+            let eval = evaluations
+                .iter()
+                .find(|e| e.statute_id == "FMLA_Sec2612")
+                .expect("FMLA_Sec2612 should be in evaluations");
+            assert_eq!(eval.result_type, "judicial_discretion");
+        }
+    }
+
+    #[test]
+    fn test_gdpr_breach_notification_deterministic() {
+        let service = FormalizeService::new();
+        let articles = vec![FullArticle {
+            law_id: "eu_gdpr".to_string(),
+            title: "GDPR data breach notification".to_string(),
+            content: "Notification of a personal data breach to the supervisory authority."
+                .to_string(),
+            unique_anchor: "GDPR_Art33_Article".to_string(),
+            anchor: None,
+            url: "https://gdpr-info.eu/art-33-gdpr/".to_string(),
+        }];
+        let facts = facts_with(
+            &[("breach_occurred", "true")],
+            "個人データの侵害が発生した場合",
+        );
+
+        let evaluations = service.evaluate_for(&articles, &facts, "EU");
+        let eval = evaluations
+            .iter()
+            .find(|e| e.statute_id == "GDPR_Art33")
+            .expect("GDPR_Art33 should be in evaluations");
+        assert_eq!(eval.result_type, "deterministic");
+        assert!(eval.applies);
+    }
+
+    #[test]
+    fn test_minpo_public_policy_stays_discretion() {
+        let service = FormalizeService::new();
+        let articles = vec![FullArticle {
+            law_id: "jp_minpo".to_string(),
+            title: "民法 第90条".to_string(),
+            content: "公の秩序又は善良の風俗に反する法律行為は、無効とする。".to_string(),
+            unique_anchor: "Minpo_Article_90".to_string(),
+            anchor: None,
+            url: "https://laws.e-gov.go.jp/law/129AC0000000089".to_string(),
+        }];
+        let facts = facts_with(&[], "公序良俗に反するとされる契約");
+
+        // Before this fix: Minpo_Art90's sole Condition::Custom precondition was
+        // trivially `Ok(true)` under `evaluate_simple`'s catch-all → incorrectly
+        // "deterministic"/applies==true. After the fix: Custom always errors →
+        // correctly "judicial_discretion"/applies==false.
+        let evaluations = service.evaluate(&articles, &facts);
+        let eval = evaluations
+            .iter()
+            .find(|e| e.statute_id == "Minpo_Art90")
+            .expect("Minpo_Art90 should be in evaluations");
+        assert_eq!(eval.result_type, "judicial_discretion");
+        assert!(!eval.applies);
     }
 }

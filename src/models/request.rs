@@ -61,6 +61,10 @@ pub struct RequestBody {
     /// Thinking budget for reasoning models (0 = disabled)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking_budget: Option<u32>,
+    /// Jurisdiction code for statute resolution (e.g. "JP", "EU", "US").
+    /// When absent the pipeline defaults to "JP" (backward-compatible).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jurisdiction: Option<String>,
 }
 
 /// The outer HTTP request envelope: {"inputs": {"input_text": "..."}}
@@ -72,6 +76,9 @@ pub struct HttpRequestEnvelope {
 #[derive(Debug, Deserialize)]
 pub struct InputsField {
     pub input_text: String,
+    /// Optional jurisdiction code (defaults to "JP" when absent).
+    #[serde(default)]
+    pub jurisdiction: Option<String>,
 }
 
 #[cfg(test)]
@@ -84,6 +91,15 @@ mod tests {
         let body: RequestBody = serde_json::from_str(json).unwrap();
         assert_eq!(body.input_text, "個人情報保護法について");
         assert!(body.grounding.is_none());
+        // Absent jurisdiction stays None — callers default it to "JP".
+        assert!(body.jurisdiction.is_none());
+    }
+
+    #[test]
+    fn test_request_body_with_jurisdiction() {
+        let json = r#"{"input_text": "GDPR erasure", "jurisdiction": "EU"}"#;
+        let body: RequestBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.jurisdiction.as_deref(), Some("EU"));
     }
 
     #[test]
@@ -91,6 +107,14 @@ mod tests {
         let json = r#"{"inputs": {"input_text": "テスト"}}"#;
         let envelope: HttpRequestEnvelope = serde_json::from_str(json).unwrap();
         assert_eq!(envelope.inputs.input_text, "テスト");
+        assert!(envelope.inputs.jurisdiction.is_none());
+    }
+
+    #[test]
+    fn test_http_envelope_with_jurisdiction() {
+        let json = r#"{"inputs": {"input_text": "テスト", "jurisdiction": "US"}}"#;
+        let envelope: HttpRequestEnvelope = serde_json::from_str(json).unwrap();
+        assert_eq!(envelope.inputs.jurisdiction.as_deref(), Some("US"));
     }
 
     #[test]

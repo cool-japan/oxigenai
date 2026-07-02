@@ -1,5 +1,5 @@
 use crate::models::response::{ErrorResponse, ResponseBody};
-use crate::services::pipeline::{PipelineContext, generate_law_report};
+use crate::services::pipeline::{PipelineContext, ReportOptions, generate_law_report};
 use axum::{Json, body::Bytes, extract::State, http::StatusCode, response::IntoResponse};
 use std::sync::Arc;
 use tracing::{error, info};
@@ -19,9 +19,17 @@ pub async fn generate_report(State(ctx): State<AppState>, body: Bytes) -> impl I
         Err(err_response) => return err_response,
     };
 
-    info!("Received query: {} chars", input_text.len());
+    // Optional jurisdiction (defaults to "JP" for backward compatibility).
+    let jurisdiction = extract_jurisdiction(&body);
+    let options = ReportOptions::new(jurisdiction);
 
-    match generate_law_report(&input_text, &ctx).await {
+    info!(
+        "Received query: {} chars (jurisdiction={})",
+        input_text.len(),
+        options.jurisdiction
+    );
+
+    match generate_law_report(&input_text, &ctx, &options).await {
         Ok((outputs, usage_metadata)) => {
             let response = ResponseBody {
                 outputs,
@@ -82,6 +90,25 @@ fn extract_input_text(body: &Bytes) -> Result<String, axum::response::Response> 
     }
 }
 
+/// Extract an optional jurisdiction code from the request body.
+///
+/// Looks at `inputs.jurisdiction` first, then a top-level `jurisdiction`.
+/// Returns `"JP"` when absent or unparseable (backward-compatible default).
+fn extract_jurisdiction(body: &Bytes) -> String {
+    let default = crate::verifier::jurisdiction::DEFAULT_JURISDICTION.to_string();
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return default;
+    };
+    value
+        .get("inputs")
+        .and_then(|v| v.get("jurisdiction"))
+        .or_else(|| value.get("jurisdiction"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or(default)
+}
+
 /// GET /health — Health check endpoint.
 pub async fn health_check() -> StatusCode {
     StatusCode::OK
@@ -118,5 +145,26 @@ mod tests {
         let body = b"{\"inputs\": {\"input_text\": \"   \"}}";
         let result = extract_input_text(&Bytes::from_static(body));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_extract_jurisdiction_default_jp() {
+        // Absent jurisdiction → default "JP" (backward-compatible).
+        let body = b"{\"inputs\": {\"input_text\": \"test\"}}";
+        assert_eq!(extract_jurisdiction(&Bytes::from_static(body)), "JP");
+        // Invalid JSON → default "JP".
+        assert_eq!(extract_jurisdiction(&Bytes::from_static(b"not json")), "JP");
+    }
+
+    #[test]
+    fn test_extract_jurisdiction_from_inputs() {
+        let body = b"{\"inputs\": {\"input_text\": \"test\", \"jurisdiction\": \"EU\"}}";
+        assert_eq!(extract_jurisdiction(&Bytes::from_static(body)), "EU");
+    }
+
+    #[test]
+    fn test_extract_jurisdiction_top_level_fallback() {
+        let body = b"{\"inputs\": {\"input_text\": \"test\"}, \"jurisdiction\": \"US\"}";
+        assert_eq!(extract_jurisdiction(&Bytes::from_static(body)), "US");
     }
 }

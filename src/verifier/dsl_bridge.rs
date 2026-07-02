@@ -1,6 +1,12 @@
 use crate::models::law::FullArticle;
 use crate::services::gemini_client::{GeminiService, GenerationConfig};
-use crate::verifier::jp_statutes::{all_cca_statutes, all_pipa_statutes, all_sha_statutes};
+use crate::verifier::jp_statutes::{
+    all_admin_procedure_statutes, all_cca_statutes, all_commercial_statutes,
+    all_constitution_statutes, all_construction_real_estate_statutes, all_environmental_statutes,
+    all_ip_statutes, all_minpo_statutes, all_minpo_tort_statutes, all_pipa_statutes,
+    all_sha_statutes,
+};
+use crate::verifier::jurisdiction::{DEFAULT_JURISDICTION, MultiJurisdictionMatcher};
 use futures::future::join_all;
 use legalis_core::{Condition, Effect, EffectType, Statute};
 use legalis_dsl::LegalDslParser;
@@ -109,6 +115,64 @@ impl JpDomainMatcher {
         // Consumer Contract Act (消費者契約法)
         if law_title.contains("消費者契約") {
             return Some(all_cca_statutes());
+        }
+
+        // Intellectual Property (著作権法 / 特許法 / 知的財産 / 商標法).
+        // Checked before generic civil-code keywords so 著作権 maps to the IP set.
+        if law_title.contains("著作権")
+            || law_title.contains("特許")
+            || law_title.contains("知的財産")
+            || law_title.contains("商標")
+        {
+            return Some(all_ip_statutes());
+        }
+
+        // Commercial Code / Companies Act (会社法 / 商法)
+        if law_title.contains("会社法") || law_title.contains("商法") {
+            return Some(all_commercial_statutes());
+        }
+
+        // Constitution of Japan (憲法)
+        if law_title.contains("憲法") {
+            return Some(all_constitution_statutes());
+        }
+
+        // Environmental Law (環境法 / 大気汚染防止法 / 水質汚濁防止法 / 廃棄物処理法 / 公害)
+        if law_title.contains("環境")
+            || law_title.contains("大気汚染")
+            || law_title.contains("水質汚濁")
+            || law_title.contains("廃棄物")
+            || law_title.contains("公害")
+        {
+            return Some(all_environmental_statutes());
+        }
+
+        // Administrative Procedure Act (行政手続法 / 行政指導)
+        if law_title.contains("行政手続") || law_title.contains("行政指導") {
+            return Some(all_admin_procedure_statutes());
+        }
+
+        // Construction Business / Real Estate Brokerage (建設業法 / 宅地建物取引業法 / 宅建)
+        if law_title.contains("建設業")
+            || law_title.contains("宅地建物取引")
+            || law_title.contains("宅建")
+        {
+            return Some(all_construction_real_estate_statutes());
+        }
+
+        // Civil Code tort (不法行為 / 損害賠償 / 使用者責任) → minpo Art.709/710/715(1).
+        // Placed before the generic 民法 branch so a tort-specific title returns the
+        // focused tort subset, while plain 民法 returns the comprehensive set below.
+        if law_title.contains("不法行為")
+            || law_title.contains("損害賠償")
+            || law_title.contains("使用者責任")
+        {
+            return Some(all_minpo_tort_statutes());
+        }
+
+        // Civil Code (民法) — comprehensive set (tort + general/contract provisions)
+        if law_title.contains("民法") {
+            return Some(all_minpo_statutes());
         }
 
         None
@@ -262,6 +326,7 @@ fn sanitize_id(raw: &str) -> String {
 /// 3. Fallback to `Condition::Custom` (never fails, always produces ≥1 statute)
 pub struct StatuteBridge {
     translator: DslTranslator,
+    jurisdictions: MultiJurisdictionMatcher,
 }
 
 impl Default for StatuteBridge {
@@ -275,18 +340,37 @@ impl StatuteBridge {
     pub fn new() -> Self {
         Self {
             translator: DslTranslator::new(),
+            jurisdictions: MultiJurisdictionMatcher::new(),
         }
     }
 
-    /// Convert a batch of articles into `ArticleStatute` objects.
+    /// Convert a batch of articles into `ArticleStatute` objects (jurisdiction `"JP"`).
     ///
     /// - Domain-matched articles return statutes without an API call.
     /// - Others go through Gemini DSL translation with a custom fallback.
+    ///
+    /// Thin wrapper over [`Self::convert_articles_for`] preserving the JP default.
     pub async fn convert_articles(
         &self,
         articles: &[FullArticle],
         gemini: &GeminiService,
     ) -> Vec<ArticleStatute> {
+        self.convert_articles_for(articles, gemini, DEFAULT_JURISDICTION)
+            .await
+    }
+
+    /// Convert a batch of articles into `ArticleStatute` objects for `jurisdiction`.
+    ///
+    /// Domain matching is dispatched through [`MultiJurisdictionMatcher`]; the
+    /// code is normalized first (empty/unknown → `"JP"`). Unmatched articles fall
+    /// through to Gemini DSL translation with a `Condition::Custom` fallback.
+    pub async fn convert_articles_for(
+        &self,
+        articles: &[FullArticle],
+        gemini: &GeminiService,
+        jurisdiction: &str,
+    ) -> Vec<ArticleStatute> {
+        let code = self.jurisdictions.normalize_code(jurisdiction);
         let mut results: Vec<ArticleStatute> = vec![];
 
         // Separate domain-matched articles from those needing LLM translation.
@@ -295,10 +379,11 @@ impl StatuteBridge {
         let mut llm_articles: Vec<&FullArticle> = vec![];
 
         for article in articles {
-            if let Some(statutes) = JpDomainMatcher::match_law_title(&article.title) {
+            if let Some(statutes) = self.jurisdictions.match_for(&code, &article.title) {
                 if domain_matched_titles.insert(article.title.clone()) {
                     debug!(
-                        "Domain match: {} → {} statutes",
+                        "Domain match [{}]: {} → {} statutes",
+                        code,
                         article.title,
                         statutes.len()
                     );
@@ -350,15 +435,34 @@ impl StatuteBridge {
         results
     }
 
-    /// Quick synchronous conversion using only domain matching (no API calls).
-    /// Used when Gemini is unavailable or for testing.
+    /// Quick synchronous conversion using only domain matching (no API calls),
+    /// for jurisdiction `"JP"`.
+    ///
+    /// Used when Gemini is unavailable or for testing. Thin wrapper over
+    /// [`Self::convert_articles_domain_only_for`] preserving the JP default.
     #[must_use]
     pub fn convert_articles_domain_only(articles: &[FullArticle]) -> Vec<ArticleStatute> {
+        Self::convert_articles_domain_only_for(articles, DEFAULT_JURISDICTION)
+    }
+
+    /// Quick synchronous conversion using only domain matching (no API calls),
+    /// for an arbitrary `jurisdiction`.
+    ///
+    /// Domain matching is dispatched through [`MultiJurisdictionMatcher`] (code
+    /// normalized first). Unmatched articles get a `Condition::Custom` fallback
+    /// statute so the result is never empty.
+    #[must_use]
+    pub fn convert_articles_domain_only_for(
+        articles: &[FullArticle],
+        jurisdiction: &str,
+    ) -> Vec<ArticleStatute> {
+        let jurisdictions = MultiJurisdictionMatcher::new();
+        let code = jurisdictions.normalize_code(jurisdiction);
         let mut results = vec![];
         let mut seen_titles = std::collections::HashSet::new();
 
         for article in articles {
-            if let Some(statutes) = JpDomainMatcher::match_law_title(&article.title) {
+            if let Some(statutes) = jurisdictions.match_for(&code, &article.title) {
                 if seen_titles.insert(article.title.clone()) {
                     for statute in statutes {
                         results.push(ArticleStatute {
@@ -446,7 +550,8 @@ mod tests {
 
     #[test]
     fn test_domain_matcher_no_match() {
-        let result = JpDomainMatcher::match_law_title("著作権法");
+        // 道路交通法 is intentionally outside every covered domain.
+        let result = JpDomainMatcher::match_law_title("道路交通法");
         assert!(result.is_none());
     }
 
@@ -461,6 +566,101 @@ mod tests {
     fn test_domain_matcher_overtime() {
         let result = JpDomainMatcher::match_law_title("時間外労働の上限規制に関する法律");
         assert!(result.is_some());
+    }
+
+    #[test]
+    fn test_domain_matcher_minpo() {
+        let statutes = JpDomainMatcher::match_law_title("民法");
+        assert!(statutes.is_some());
+        let statutes = statutes.unwrap();
+        // The Civil Code set reuses the legalis-jp tort article 709 and adds general provisions
+        assert!(statutes.iter().any(|s| s.id == "minpo-709"));
+        assert!(statutes.iter().any(|s| s.id == "Minpo_Art415"));
+    }
+
+    #[test]
+    fn test_domain_matcher_tort() {
+        // 不法行為 / 損害賠償 keywords map to the focused minpo tort articles.
+        let statutes = JpDomainMatcher::match_law_title("不法行為に基づく損害賠償請求");
+        assert!(statutes.is_some());
+        let statutes = statutes.unwrap();
+        assert_eq!(statutes.len(), 3);
+        assert!(statutes.iter().any(|s| s.id == "minpo-709"));
+        assert!(statutes.iter().any(|s| s.id == "minpo-715-1"));
+    }
+
+    #[test]
+    fn test_domain_matcher_commercial() {
+        let statutes = JpDomainMatcher::match_law_title("会社法");
+        assert!(statutes.is_some());
+        assert!(
+            statutes
+                .unwrap()
+                .iter()
+                .any(|s| s.id == "CompaniesAct_Art423")
+        );
+        // 商法 maps to the same commercial set.
+        assert!(JpDomainMatcher::has_domain_match("商法"));
+    }
+
+    #[test]
+    fn test_domain_matcher_constitution() {
+        let statutes = JpDomainMatcher::match_law_title("日本国憲法");
+        assert!(statutes.is_some());
+        assert!(statutes.unwrap().iter().any(|s| s.id == "Const_Art13"));
+    }
+
+    #[test]
+    fn test_domain_matcher_intellectual_property() {
+        // 著作権法 was previously unmatched; it now maps to the IP set.
+        let copyright = JpDomainMatcher::match_law_title("著作権法");
+        assert!(copyright.is_some());
+        assert!(copyright.unwrap().iter().any(|s| s.id == "Copyright_Art21"));
+        // 特許法 maps to the same IP set with patent articles present.
+        let patent = JpDomainMatcher::match_law_title("特許法 第68条");
+        assert!(patent.is_some());
+        assert!(patent.unwrap().iter().any(|s| s.id == "Patent_Art68"));
+    }
+
+    #[test]
+    fn test_domain_matcher_environmental() {
+        let statutes = JpDomainMatcher::match_law_title("大気汚染防止法");
+        assert!(statutes.is_some());
+        assert!(
+            statutes
+                .unwrap()
+                .iter()
+                .any(|s| s.id == "AirPollution_Art13")
+        );
+        assert!(JpDomainMatcher::has_domain_match("環境基本法"));
+    }
+
+    #[test]
+    fn test_domain_matcher_administrative_procedure() {
+        let statutes = JpDomainMatcher::match_law_title("行政手続法");
+        assert!(statutes.is_some());
+        assert!(statutes.unwrap().iter().any(|s| s.id == "AdminProc_Art5"));
+    }
+
+    #[test]
+    fn test_domain_matcher_construction_real_estate() {
+        let real_estate = JpDomainMatcher::match_law_title("宅地建物取引業法");
+        assert!(real_estate.is_some());
+        assert!(
+            real_estate
+                .unwrap()
+                .iter()
+                .any(|s| s.id == "RealEstate_Art35")
+        );
+        // 建設業法 maps to the same set with construction articles present.
+        let construction = JpDomainMatcher::match_law_title("建設業法 第19条");
+        assert!(construction.is_some());
+        assert!(
+            construction
+                .unwrap()
+                .iter()
+                .any(|s| s.id == "Construction_Art3")
+        );
     }
 
     #[test]
@@ -482,7 +682,11 @@ mod tests {
                 "労働基準法 第32条",
                 "1日8時間を超えて労働させてはならない。",
             ),
-            make_article("著作権法 第1条", "著作者の権利を定める。"),
+            // 道路交通法 is outside every covered domain → exercises the Fallback path.
+            make_article(
+                "道路交通法 第1条",
+                "車両は信号機の表示に従わなければならない。",
+            ),
         ];
         let results = StatuteBridge::convert_articles_domain_only(&articles);
         assert!(!results.is_empty());
@@ -492,6 +696,23 @@ mod tests {
             results
                 .iter()
                 .any(|r| r.source == ConversionSource::Fallback)
+        );
+    }
+
+    #[test]
+    fn test_domain_only_conversion_eu() {
+        // With jurisdiction "EU", a GDPR title resolves to EU-tagged statutes.
+        let articles = vec![make_article(
+            "GDPR personal data processing",
+            "Regulation (EU) 2016/679 governs the processing of personal data.",
+        )];
+        let results = StatuteBridge::convert_articles_domain_only_for(&articles, "EU");
+        assert!(!results.is_empty());
+        assert!(results.iter().any(|r| r.source == ConversionSource::Domain));
+        assert!(
+            results
+                .iter()
+                .all(|r| r.statute.jurisdiction.as_deref() == Some("EU"))
         );
     }
 
